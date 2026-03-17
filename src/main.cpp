@@ -1,18 +1,21 @@
 #include <Arduino.h>
+#include "percepetion.h"
+#include "movement.h"
+#include "fsm.h"
 
-// put function declarations here:
-int myFunction(int, int);
+percepetion perception;
+movement    motors(&perception);
+fsm         stateMachine;
 
-void setup() {
-  // put your setup code here, to run once:
-  int result = myFunction(2, 3);
+void setup()
+{
+    Serial.begin(115200);
+    perception.init();
+    motors.enable();
 }
 
-void loop() {
-  // put your main code here, to run repeatedly:
-}
-
-// put function definitions here:
-int myFunction(int x, int y) {
-  return x + y;
+void loop()
+{
+    perception.update();
+    stateMachine.fsmUpdate();
 }
