@@ -111,28 +111,39 @@ int percepetion::averageBuf(const int *buf, uint8_t len) const
 // Method: place sensor at known distances (e.g. every 50 mm), record
 // raw ADC values, then fit D = k * ADC^exp (e.g. in MATLAB / Excel).
 
-float percepetion::irLongRawToMm(int raw) const
+float percepetion::irLongFrontRawToMm(int raw) const
 {
-    // Sharp 2Y0A21  (100-800 mm range)
-    // Power-law curve fit from tutorial calibration data:
-    //   D_cm = 46161 * pow(ADC, -1.302)   (calibrated)
-    //   D_cm = 17948 * pow(ADC, -1.22)    (datasheet)
-    // Using calibrated values; multiply by 10 to convert cm → mm.
-    // NOTE: replace coefficients with your own calibration data.
-    if (raw < 20) return 800.0f;  // out of range — report max
-    float mm = 46161.0f * pow((float)raw, -1.302f) * 10.0f;
+    // Sharp 2Y0A21 on A9 (front-facing, 100-800 mm range)
+    // Calibrated curve fit: D_cm = 4577.8 * ADC^-0.939 - 2
+    if (raw < 20) return 800.0f;
+    float mm = (4577.8f * pow((float)raw, -0.939f) - 2.0f) * 10.0f;
     return constrain(mm, 100.0f, 800.0f);
 }
 
-float percepetion::irMedRawToMm(int raw) const
+float percepetion::irLongLeftRawToMm(int raw) const
 {
-    // Sharp 2D120X / 2Y0A41SK  (40-300 mm range)
-    // Power-law curve fit (same approach as long-range).
-    // NOTE: tutorial only provides 2Y0A21 coefficients — these are
-    // placeholder estimates for the medium-range sensor.  You MUST
-    // calibrate: measure ADC at known distances, fit D = k * ADC^exp.
+    // Sharp 2Y0A21 on A8 (left-facing, 100-800 mm range)
+    // Calibrated curve fit: D_cm = 4754.1 * ADC^-0.98
+    if (raw < 20) return 800.0f;
+    float mm = 4754.1f * pow((float)raw, -0.98f) * 10.0f;
+    return constrain(mm, 100.0f, 800.0f);
+}
+
+float percepetion::irMedRightRawToMm(int raw) const
+{
+    // Sharp 2D120X / 2Y0A41SK on A12 (right sensor, 40-300 mm range)
+    // Calibrated curve fit: D_cm = 2502.3 * ADC^-1.001
     if (raw < 15) return 300.0f;
-    float mm = 9462.0f * pow((float)raw, -1.16f) * 10.0f;
+    float mm = 2502.3f * pow((float)raw, -1.001f) * 10.0f;
+    return constrain(mm, 40.0f, 300.0f);
+}
+
+float percepetion::irMedRearRawToMm(int raw) const
+{
+    // Sharp 2D120X / 2Y0A41SK on A13 (left/rear sensor, 40-300 mm range)
+    // Calibrated curve fit: D_cm = 2421.2 * ADC^-0.992
+    if (raw < 15) return 300.0f;
+    float mm = 2421.2f * pow((float)raw, -0.992f) * 10.0f;
     return constrain(mm, 40.0f, 300.0f);
 }
 
@@ -154,22 +165,22 @@ float percepetion::getGyroZ()
 
 float percepetion::getIRLongFront()
 {
-    return irLongRawToMm(averageBuf(irLongFrontBuf, IR_FILTER_SAMPLES));
+    return irLongFrontRawToMm(averageBuf(irLongFrontBuf, IR_FILTER_SAMPLES));
 }
 
 float percepetion::getIRLongLeft()
 {
-    return irLongRawToMm(averageBuf(irLongLeftBuf, IR_FILTER_SAMPLES));
+    return irLongLeftRawToMm(averageBuf(irLongLeftBuf, IR_FILTER_SAMPLES));
 }
 
 float percepetion::getIRMedRight()
 {
-    return irMedRawToMm(averageBuf(irMedRightBuf, IR_FILTER_SAMPLES));
+    return irMedRightRawToMm(averageBuf(irMedRightBuf, IR_FILTER_SAMPLES));
 }
 
 float percepetion::getIRMedRear()
 {
-    return irMedRawToMm(averageBuf(irMedRearBuf, IR_FILTER_SAMPLES));
+    return irMedRearRawToMm(averageBuf(irMedRearBuf, IR_FILTER_SAMPLES));
 }
 
 // ── Raw ADC (for calibration / logging) ───────────────────────────
@@ -224,4 +235,17 @@ bool percepetion::isBatteryLow()
 {
     // Below ~3.5 V per cell is the danger zone for LiPo
     return (analogRead(PIN_BATTERY) < 717);
+}
+
+void percepetion::calibrateGyro() {
+    long sum = 0;
+    uint16_t samples = 500;
+    for (uint16_t i = 0; i < samples; ++i) {
+        bno08x.getSensorEvent(&sensorValue);
+        if (sensorValue.sensorId == SH2_GYROSCOPE_UNCALIBRATED) {
+            sum += sensorValue.un.gyroscope.z;
+        }
+        delay(5);  // sample at ~200 Hz
+    }
+    gyro_bias = (float)sum / samples;
 }

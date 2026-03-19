@@ -11,7 +11,7 @@ static const byte PIN_RIGHT_FRONT = 51;
 static const int PWM_NEUTRAL = 1500;
 
 // PID tuning — adjust during physical testing
-static const float DEFAULT_KP = 2.0f;
+static const float DEFAULT_KP = 2.5f;
 static const float DEFAULT_KI = 0.0f;
 static const float DEFAULT_KD = 0.5f;
 
@@ -20,7 +20,7 @@ movement::movement(percepetion *perception)
       heading(0.0f), target_heading(0.0f),
       last_update_us(0),
       Kp(DEFAULT_KP), Ki(DEFAULT_KI), Kd(DEFAULT_KD),
-      integral(0.0f), prev_error(0.0f)
+      integral(0.0f), prev_error(0.0f), filtered_derivative(0.0f)
 {
 }
 
@@ -65,12 +65,17 @@ void movement::setMotorSpeeds(int lf, int lr, int rr, int rf)
 
 void movement::latchHeading()
 {
-    // Reset heading integrator and PID state for a fresh movement
-    heading = 0.0f;
-    target_heading = 0.0f;
+    // Hold current global heading as the new target; reset only PID state
+    target_heading = heading;
     integral = 0.0f;
     prev_error = 0.0f;
+    filtered_derivative = 0.0f;
     last_update_us = micros();
+}
+
+void movement::setTargetHeading(float degrees)
+{
+    target_heading = degrees;
 }
 
 float movement::headingCorrection()
@@ -85,11 +90,14 @@ float movement::headingCorrection()
 
     float error = target_heading - heading;
 
-    integral  += error * dt;
-    float derivative = (error - prev_error) / dt;
+    integral += error * dt;
+    integral = constrain(integral, -MAX_INTEGRAL, MAX_INTEGRAL);
+
+    float raw_derivative = (error - prev_error) / dt;
+    filtered_derivative = 0.7f * filtered_derivative + 0.3f * raw_derivative;
     prev_error = error;
 
-    return Kp * error + Ki * integral + Kd * derivative;
+    return Kp * error + Ki * integral + Kd * filtered_derivative;
 }
 
 // Positive correction turns robot CCW (adds to left, subtracts from right)
@@ -143,5 +151,5 @@ void movement::MoveRight(int speed)
 void movement::Stop()
 {
     setMotorSpeeds(0, 0, 0, 0);
-    latchHeading();  // reset heading so next motion starts fresh
+    latchHeading();  // hold current heading as target; reset PID integrators
 }

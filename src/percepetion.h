@@ -5,10 +5,10 @@
 
 // ── Pin assignments (adjust to match your wiring) ──────────────────
 // IR sensors — analog pins
-constexpr uint8_t PIN_IR_LONG_FRONT  = A1;   // 2Y0A21, 100-800 mm
-constexpr uint8_t PIN_IR_LONG_LEFT   = A2;   // 2Y0A21, 100-800 mm
-constexpr uint8_t PIN_IR_MED_RIGHT   = A3;   // 2D120X / 2Y0A41SK, 40-300 mm
-constexpr uint8_t PIN_IR_MED_REAR    = A4;   // 2D120X / 2Y0A41SK, 40-300 mm
+constexpr uint8_t PIN_IR_LONG_FRONT  = A9;   // 2Y0A21, 100-800 mm — front long range (part number crossed out)
+constexpr uint8_t PIN_IR_LONG_LEFT   = A8;   // 2Y0A21, 100-800 mm — left sensor F 88
+constexpr uint8_t PIN_IR_MED_RIGHT   = A12;  // 2D120X / 2Y0A41SK, 40-300 mm — right sensor
+constexpr uint8_t PIN_IR_MED_REAR    = A13;  // 2D120X / 2Y0A41SK, 40-300 mm — left sensor (calibrated)
 
 // Ultrasonic HC-SR04
 constexpr uint8_t PIN_US_TRIG = 48;
@@ -46,8 +46,10 @@ private:
     // Convert raw ADC (0-1023) to distance in mm.
     // NOTE: these are starting-point approximations — calibrate with
     //       measured data and replace with your own curve fit.
-    float irLongRawToMm(int raw)  const;   // 2Y0A21
-    float irMedRawToMm(int raw)   const;   // 2D120X / 2Y0A41SK
+    float irLongFrontRawToMm(int raw)  const;   // 2Y0A21 (A9)
+    float irLongLeftRawToMm(int raw)   const;   // 2Y0A21 (A8)
+    float irMedRightRawToMm(int raw)  const;   // 2D120X / 2Y0A41SK (A12)
+    float irMedRearRawToMm(int raw)   const;   // 2D120X / 2Y0A41SK (A13)
 
 public:
     percepetion();
@@ -82,4 +84,6 @@ public:
     int   getBatteryRaw();            // raw ADC 0-1023
     float getBatteryVoltage();        // estimated voltage (V)
     bool  isBatteryLow();             // true when below safe threshold
+
+    void calibrateGyro();              // call when robot is stationary to set gyro zero
 };

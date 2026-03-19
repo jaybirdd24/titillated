@@ -23,6 +23,9 @@ class movement
         float Kd;
         float integral;
         float prev_error;
+        float filtered_derivative;
+
+        static const float MAX_INTEGRAL = 300.0f;
 
         // Sets raw PWM microseconds on all 4 motors (1500 = stop)
         void setMotorSpeeds(int lf, int lr, int rr, int rf);
@@ -46,4 +49,7 @@ class movement
         void MoveLeft(int speed);
         void MoveRight(int speed);
         void Stop();
+
+        // Set the desired global heading (degrees); use before/after a turn
+        void setTargetHeading(float degrees);
 };

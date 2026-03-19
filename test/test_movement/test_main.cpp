@@ -7,7 +7,7 @@ static const int  TEST_SPEED    = 300;   // 0–1000
 static const int  TEST_DURATION = 2000;  // ms per movement
 static const int  TEST_PAUSE    = 500;   // ms between movements
 
-static SoftwareSerial WirelessSerial(19, 18);  // RX, TX  (HC-12 module)
+static SoftwareSerial WirelessSerial(10, 11);  // RX, TX  (HC-12 module)
 
 static percepetion perception;
 static movement    motors(&perception);
@@ -21,6 +21,8 @@ static void runMovement(void (*moveFn)(int), const char *label)
     while (millis() - start < TEST_DURATION) {
         perception.update();
         moveFn(TEST_SPEED);
+        WirelessSerial.print("  gyroZ: ");
+        WirelessSerial.println(perception.getGyroZ(), 4);
     }
     motors.Stop();
 
@@ -51,4 +53,10 @@ void setup()
     WirelessSerial.println("=== Movement Tests Complete ===");
 }
 
-void loop() {}
+void loop()
+{
+    perception.update();
+    WirelessSerial.print("gyroZ: ");
+    WirelessSerial.println(perception.getGyroZ(), 4);
+    delay(100);
+}
