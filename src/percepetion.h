@@ -51,6 +51,8 @@ private:
     float irMedRightRawToMm(int raw)  const;   // 2D120X / 2Y0A41SK (A12)
     float irMedRearRawToMm(int raw)   const;   // 2D120X / 2Y0A41SK (A13)
 
+    float gyro_bias; // for simple gyro zeroing
+
 public:
     percepetion();
     ~percepetion();
@@ -86,4 +88,5 @@ public:
     bool  isBatteryLow();             // true when below safe threshold
 
     void calibrateGyro();              // call when robot is stationary to set gyro zero
+
 };
