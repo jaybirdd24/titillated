@@ -11,9 +11,9 @@ static const byte PIN_RIGHT_FRONT = 51;
 static const int PWM_NEUTRAL = 1500;
 
 // PID tuning — adjust during physical testing
-static const float DEFAULT_KP = 2.5f;
-static const float DEFAULT_KI = 0.0f;
-static const float DEFAULT_KD = 0.5f;
+static const float DEFAULT_KP = 30.0f;
+static const float DEFAULT_KI = 0.01f;
+static const float DEFAULT_KD = 9.0f;
 
 movement::movement(percepetion *perception)
     : perception(perception),
@@ -34,6 +34,7 @@ void movement::enable()
     left_rear_motor.attach(PIN_LEFT_REAR);
     right_rear_motor.attach(PIN_RIGHT_REAR);
     right_front_motor.attach(PIN_RIGHT_FRONT);
+    last_update_us = micros();  // prevent garbage dt on first headingCorrection() call
 }
 
 void movement::disable()
@@ -88,7 +89,7 @@ float movement::headingCorrection()
     float gyroZ = perception->getGyroZ();
     heading += gyroZ * (180.0f / PI) * dt;
 
-    float error = target_heading - heading;
+    float error = -target_heading + heading;
 
     integral += error * dt;
     integral = constrain(integral, -MAX_INTEGRAL, MAX_INTEGRAL);
