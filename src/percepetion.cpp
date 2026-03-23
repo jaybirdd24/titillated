@@ -10,10 +10,10 @@ percepetion::percepetion()
       irBufIdx(0),
       usDistanceCm(0.0f)
 {
-    memset(irLongFrontBuf, 0, sizeof(irLongFrontBuf));
+    memset(irMedFrontBuf,  0, sizeof(irMedFrontBuf));
     memset(irLongLeftBuf,  0, sizeof(irLongLeftBuf));
     memset(irMedRightBuf,  0, sizeof(irMedRightBuf));
-    memset(irMedRearBuf,   0, sizeof(irMedRearBuf));
+    memset(irLongRearBuf,  0, sizeof(irLongRearBuf));
 }
 
 percepetion::~percepetion() {}
@@ -25,10 +25,10 @@ percepetion::~percepetion() {}
 bool percepetion::init()
 {
     // ── IR sensor pins (analog inputs default, but be explicit) ───
-    pinMode(PIN_IR_LONG_FRONT, INPUT);
+    pinMode(PIN_IR_MED_FRONT,  INPUT);
     pinMode(PIN_IR_LONG_LEFT,  INPUT);
     pinMode(PIN_IR_MED_RIGHT,  INPUT);
-    pinMode(PIN_IR_MED_REAR,   INPUT);
+    pinMode(PIN_IR_LONG_REAR,  INPUT);
 
     // ── Ultrasonic ────────────────────────────────────────────────
     pinMode(PIN_US_TRIG, OUTPUT);
@@ -78,10 +78,10 @@ void percepetion::update()
 
 void percepetion::readIR()
 {
-    irLongFrontBuf[irBufIdx] = analogRead(PIN_IR_LONG_FRONT);
+    irMedFrontBuf [irBufIdx] = analogRead(PIN_IR_MED_FRONT);
     irLongLeftBuf [irBufIdx] = analogRead(PIN_IR_LONG_LEFT);
     irMedRightBuf [irBufIdx] = analogRead(PIN_IR_MED_RIGHT);
-    irMedRearBuf  [irBufIdx] = analogRead(PIN_IR_MED_REAR);
+    irLongRearBuf [irBufIdx] = analogRead(PIN_IR_LONG_REAR);
 }
 
 void percepetion::readUltrasonic()
@@ -111,13 +111,13 @@ int percepetion::averageBuf(const int *buf, uint8_t len) const
 // Method: place sensor at known distances (e.g. every 50 mm), record
 // raw ADC values, then fit D = k * ADC^exp (e.g. in MATLAB / Excel).
 
-float percepetion::irLongFrontRawToMm(int raw) const
+float percepetion::irMedFrontRawToMm(int raw) const
 {
-    // Sharp 2Y0A21 on A9 (front-facing, 100-800 mm range)
-    // Calibrated curve fit: D_cm = 4577.8 * ADC^-0.939 - 2
-    if (raw < 20) return 800.0f;
-    float mm = (4577.8f * pow((float)raw, -0.939f) - 2.0f) * 10.0f;
-    return constrain(mm, 100.0f, 800.0f);
+    // Sharp 2D120X / 2Y0A41SK on A10 (front-facing, 40-300 mm range)
+    // TODO: calibrate — using right-sensor curve as placeholder
+    if (raw < 15) return 300.0f;
+    float mm = 2421.2f * pow((float)raw, -0.992f) * 10.0f;
+    return constrain(mm, 40.0f, 300.0f);
 }
 
 float percepetion::irLongLeftRawToMm(int raw) const
@@ -138,13 +138,13 @@ float percepetion::irMedRightRawToMm(int raw) const
     return constrain(mm, 40.0f, 300.0f);
 }
 
-float percepetion::irMedRearRawToMm(int raw) const
+float percepetion::irLongRearRawToMm(int raw) const
 {
-    // Sharp 2D120X / 2Y0A41SK on A13 (left/rear sensor, 40-300 mm range)
-    // Calibrated curve fit: D_cm = 2421.2 * ADC^-0.992
-    if (raw < 15) return 300.0f;
-    float mm = 2421.2f * pow((float)raw, -0.992f) * 10.0f;
-    return constrain(mm, 40.0f, 300.0f);
+    // Sharp 2Y0A21 on A9 (rear-facing, 100-800 mm range)
+    // TODO: calibrate — using old A9 front curve as placeholder
+    if (raw < 20) return 800.0f;
+    float mm = (4577.8f * pow((float)raw, -0.939f) - 2.0f) * 10.0f;
+    return constrain(mm, 100.0f, 800.0f);
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -163,9 +163,9 @@ float percepetion::getGyroZ()
 //  IR getters — filtered distance (mm)
 // ═══════════════════════════════════════════════════════════════════
 
-float percepetion::getIRLongFront()
+float percepetion::getIRMedFront()
 {
-    return irLongFrontRawToMm(averageBuf(irLongFrontBuf, IR_FILTER_SAMPLES));
+    return irMedFrontRawToMm(averageBuf(irMedFrontBuf, IR_FILTER_SAMPLES));
 }
 
 float percepetion::getIRLongLeft()
@@ -178,16 +178,16 @@ float percepetion::getIRMedRight()
     return irMedRightRawToMm(averageBuf(irMedRightBuf, IR_FILTER_SAMPLES));
 }
 
-float percepetion::getIRMedRear()
+float percepetion::getIRLongRear()
 {
-    return irMedRearRawToMm(averageBuf(irMedRearBuf, IR_FILTER_SAMPLES));
+    return irLongRearRawToMm(averageBuf(irLongRearBuf, IR_FILTER_SAMPLES));
 }
 
 // ── Raw ADC (for calibration / logging) ───────────────────────────
 
-int percepetion::getIRLongFrontRaw()
+int percepetion::getIRMedFrontRaw()
 {
-    return averageBuf(irLongFrontBuf, IR_FILTER_SAMPLES);
+    return averageBuf(irMedFrontBuf, IR_FILTER_SAMPLES);
 }
 
 int percepetion::getIRLongLeftRaw()
@@ -200,9 +200,9 @@ int percepetion::getIRMedRightRaw()
     return averageBuf(irMedRightBuf, IR_FILTER_SAMPLES);
 }
 
-int percepetion::getIRMedRearRaw()
+int percepetion::getIRLongRearRaw()
 {
-    return averageBuf(irMedRearBuf, IR_FILTER_SAMPLES);
+    return averageBuf(irLongRearBuf, IR_FILTER_SAMPLES);
 }
 
 // ═══════════════════════════════════════════════════════════════════

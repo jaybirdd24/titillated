@@ -24,7 +24,7 @@ static void runMovement(void (*moveFn)(int), const char *label)
         WirelessSerial.print("  gyroZ: ");
         WirelessSerial.println(perception.getGyroZ(), 4);
     }
-    motors.Stop();
+    motors.Stop(true);
 
     WirelessSerial.print("DONE:    ");
     WirelessSerial.println(label);
