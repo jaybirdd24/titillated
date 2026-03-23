@@ -14,7 +14,7 @@ void setup()
     motors.enable();
 
     // Print header for serial monitor / PuTTY
-    Serial.println("IR_R_raw,IR_R_mm,IR_Rear_raw,IR_Rear_mm");
+    Serial.println("IR_R_raw,IR_R_mm,IR_LRear_raw,IR_LRear_mm");
 }
 
 void loop()
@@ -29,9 +29,9 @@ void loop()
     Serial.print(",");
     Serial.print(perception.getIRMedRight(), 1);
     Serial.print(",");
-    Serial.print(perception.getIRMedRearRaw());
+    Serial.print(perception.getIRLongRearRaw());
     Serial.print(",");
-    Serial.println(perception.getIRMedRear(), 1);
+    Serial.println(perception.getIRLongRear(), 1);
 
     delay(100);  // 10 Hz — fast enough for calibration, slow enough to read
 }

@@ -27,7 +27,13 @@ class movement
 
         static const float MAX_INTEGRAL = 300.0f;
 
+        // Slew-rate limiting
+        float current_speeds[4];       // actual speeds being sent (LF, LR, RR, RF)
+        unsigned long last_slew_us;
+        static constexpr float MAX_SLEW_RATE = 2000.0f;  // max speed units per second
+
         // Sets raw PWM microseconds on all 4 motors (1500 = stop)
+        // Applies slew-rate limiting to smooth speed transitions
         void setMotorSpeeds(int lf, int lr, int rr, int rf);
 
         // Integrates gyroZ into heading, returns PID correction value
@@ -48,7 +54,7 @@ class movement
         void MoveBackward(int speed);
         void MoveLeft(int speed);
         void MoveRight(int speed);
-        void Stop();
+        void Stop(bool immediate = false);
 
         // Set the desired global heading (degrees); use before/after a turn
         void setTargetHeading(float degrees);

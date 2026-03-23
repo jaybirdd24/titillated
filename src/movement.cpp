@@ -20,7 +20,8 @@ movement::movement(percepetion *perception)
       heading(0.0f), target_heading(0.0f),
       last_update_us(0),
       Kp(DEFAULT_KP), Ki(DEFAULT_KI), Kd(DEFAULT_KD),
-      integral(0.0f), prev_error(0.0f), filtered_derivative(0.0f)
+      integral(0.0f), prev_error(0.0f), filtered_derivative(0.0f),
+      current_speeds{0, 0, 0, 0}, last_slew_us(0)
 {
 }
 
@@ -34,7 +35,8 @@ void movement::enable()
     left_rear_motor.attach(PIN_LEFT_REAR);
     right_rear_motor.attach(PIN_RIGHT_REAR);
     right_front_motor.attach(PIN_RIGHT_FRONT);
-    last_update_us = micros();  // prevent garbage dt on first headingCorrection() call
+    last_update_us = micros();
+    last_slew_us   = micros();
 }
 
 void movement::disable()
@@ -52,16 +54,30 @@ void movement::disable()
 
 void movement::setMotorSpeeds(int lf, int lr, int rr, int rf)
 {
-    // Clamp each channel to valid servo range
-    lf = constrain(lf, -1000, 1000);
-    lr = constrain(lr, -1000, 1000);
-    rr = constrain(rr, -1000, 1000);
-    rf = constrain(rf, -1000, 1000);
+    // Compute dt for slew-rate limiting
+    unsigned long now = micros();
+    float dt = (now - last_slew_us) / 1e6f;
+    last_slew_us = now;
 
-    left_front_motor.writeMicroseconds(PWM_NEUTRAL + lf);
-    left_rear_motor.writeMicroseconds(PWM_NEUTRAL  + lr);
-    right_rear_motor.writeMicroseconds(PWM_NEUTRAL  + rr);
-    right_front_motor.writeMicroseconds(PWM_NEUTRAL + rf);
+    // Cap dt to avoid huge jumps after pauses
+    if (dt > 0.1f) dt = 0.1f;
+
+    float max_delta = MAX_SLEW_RATE * dt;
+
+    float target[4] = {(float)lf, (float)lr, (float)rr, (float)rf};
+    for (int i = 0; i < 4; i++) {
+        float diff = target[i] - current_speeds[i];
+        if (diff >  max_delta) diff =  max_delta;
+        if (diff < -max_delta) diff = -max_delta;
+        current_speeds[i] += diff;
+        // Clamp to valid servo range
+        current_speeds[i] = constrain(current_speeds[i], -1000.0f, 1000.0f);
+    }
+
+    left_front_motor.writeMicroseconds(PWM_NEUTRAL  + (int)current_speeds[0]);
+    left_rear_motor.writeMicroseconds(PWM_NEUTRAL   + (int)current_speeds[1]);
+    right_rear_motor.writeMicroseconds(PWM_NEUTRAL  + (int)current_speeds[2]);
+    right_front_motor.writeMicroseconds(PWM_NEUTRAL + (int)current_speeds[3]);
 }
 
 void movement::latchHeading()
@@ -149,8 +165,17 @@ void movement::MoveRight(int speed)
                     speed + c);
 }
 
-void movement::Stop()
+void movement::Stop(bool immediate)
 {
-    setMotorSpeeds(0, 0, 0, 0);
-    latchHeading();  // hold current heading as target; reset PID integrators
+    if (immediate) {
+        // Bypass slew-rate limiting for emergency stops
+        current_speeds[0] = current_speeds[1] = current_speeds[2] = current_speeds[3] = 0;
+        left_front_motor.writeMicroseconds(PWM_NEUTRAL);
+        left_rear_motor.writeMicroseconds(PWM_NEUTRAL);
+        right_rear_motor.writeMicroseconds(PWM_NEUTRAL);
+        right_front_motor.writeMicroseconds(PWM_NEUTRAL);
+    } else {
+        setMotorSpeeds(0, 0, 0, 0);
+    }
+    latchHeading();
 }
