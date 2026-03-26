@@ -27,6 +27,17 @@ class movement
 
         static const float MAX_INTEGRAL = 300.0f;
 
+        // Wall-following PID state (vy axis)
+        static constexpr float KP_VY = 1.0f;
+        static constexpr float KI_VY = 0.0f;
+        static constexpr float KD_VY = 0.5f;
+        static const float MAX_INTEGRAL_VY = 300.0f;
+
+        float integral_vy;
+        float prev_error_vy;
+        float filtered_derivative_vy;
+        unsigned long last_wall_us;
+
         // Slew-rate limiting
         float current_speeds[4];       // actual speeds being sent (LF, LR, RR, RF)
         unsigned long last_slew_us;
@@ -36,12 +47,6 @@ class movement
         // Applies slew-rate limiting to smooth speed transitions
         void setMotorSpeeds(int lf, int lr, int rr, int rf);
 
-        // Integrates gyroZ into heading, returns PID correction value
-        float headingCorrection();
-
-        // Record target_heading and reset PID state; call when starting a new motion
-        void latchHeading();
-
     public:
         movement(percepetion *perception);
         ~movement();
@@ -49,6 +54,19 @@ class movement
         void enable();           // attach servos to pins
         void disable();          // detach servos
 
+        // Integrates gyroZ into heading, returns wz PID correction value
+        float headingCorrection();
+
+        // Record target_heading and reset PID state; call when starting a new motion
+        void latchHeading();
+
+        // Returns vy correction to maintain setpoint_mm distance from the left wall
+        float wallFollowCorrection(float setpoint_mm);
+
+        // Mecanum IK: vx=forward, vy=strafe(+left), wz=rotation correction
+        void drive(int vx, int vy, int wz);
+
+        // Convenience wrappers (heading-corrected only, no wall following)
         // speed: 0–1000  (matches reference code speed_val range)
         void MoveForward(int speed);
         void MoveBackward(int speed);

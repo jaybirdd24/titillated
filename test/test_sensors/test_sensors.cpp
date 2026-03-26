@@ -38,7 +38,7 @@ float irMedRightToMm(int raw) {
 
 float irLongRearToMm(int raw) {
     if (raw < 20) return 800.0f;
-    float mm = (4577.8f * pow((float)raw, -0.939f) - 2.0f) * 10.0f;
+    float mm = (4521.4f * pow((float)raw, -0.934f) - 2.0f) * 10.0f;
     return constrain(mm, 100.0f, 800.0f);
 }
 
@@ -77,6 +77,7 @@ void loop() {
     float left  = irLongLeftToMm(analogRead(PIN_IR_LONG_LEFT)) / 10.0f;
     float right = irMedRightToMm(analogRead(PIN_IR_MED_RIGHT)) / 10.0f;
     float rear  = irLongRearToMm(analogRead(PIN_IR_LONG_REAR)) / 10.0f;
+    // float rear = analogRead(PIN_IR_LONG_REAR);
     float usCm  = readUltrasonicCm();
 
     Serial.print(front, 1);  Serial.print('\t');  Serial.print('\t');
