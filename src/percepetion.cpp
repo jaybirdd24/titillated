@@ -114,36 +114,36 @@ int percepetion::averageBuf(const int *buf, uint8_t len) const
 float percepetion::irMedFrontRawToMm(int raw) const
 {
     // Sharp 2D120X / 2Y0A41SK on A10 (front-facing, 40-300 mm range)
-    // TODO: calibrate — using right-sensor curve as placeholder
+    // ok breaks at 27 ID: blue tac on bottom
     if (raw < 15) return 300.0f;
-    float mm = 2421.2f * pow((float)raw, -0.992f) * 10.0f;
+    float mm = 56806.0f * pow((float)raw, -1.166f) / 10.0f;
     return constrain(mm, 40.0f, 300.0f);
 }
 
 float percepetion::irLongLeftRawToMm(int raw) const
 {
     // Sharp 2Y0A21 on A8 (left-facing, 100-800 mm range)
-    // Calibrated curve fit: D_cm = 4754.1 * ADC^-0.98
+    // breaks at 60cm. will need lpf or averaging ID: 39
     if (raw < 20) return 800.0f;
-    float mm = 4754.1f * pow((float)raw, -0.98f) * 10.0f;
+    float mm = 79426.0f * pow((float)raw, -1.078f);
     return constrain(mm, 100.0f, 800.0f);
 }
 
 float percepetion::irMedRightRawToMm(int raw) const
 {
     // Sharp 2D120X / 2Y0A41SK on A12 (right sensor, 40-300 mm range)
-    // Calibrated curve fit: D_cm = 2502.3 * ADC^-1.001
+    // roughly 4mm inaccuracy. then jumps to 20mm at 28cm ID: blue tac on top 
     if (raw < 15) return 300.0f;
-    float mm = 2502.3f * pow((float)raw, -1.001f) * 10.0f;
+    float mm = 16827.0f * pow((float)raw, -0.949f);
     return constrain(mm, 40.0f, 300.0f);
 }
 
 float percepetion::irLongRearRawToMm(int raw) const
 {
     // Sharp 2Y0A21 on A9 (rear-facing, 100-800 mm range)
-    // TODO: calibrate — using old A9 front curve as placeholder
+    // good but breaks at 65 cm ID: 06
     if (raw < 20) return 800.0f;
-    float mm = (4577.8f * pow((float)raw, -0.939f) - 2.0f) * 10.0f;
+    float mm = 128820.0f * pow((float)raw, -1.161f) / 10.0f;
     return constrain(mm, 100.0f, 800.0f);
 }
 
