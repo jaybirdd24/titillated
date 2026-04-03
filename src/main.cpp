@@ -6,7 +6,7 @@ percepetion perception;
 movement    motors(&perception);
 
 static const int   FORWARD_SPEED      = 300;     // 0–1000
-static const float WALL_SETPOINT     = 150.0f;  // mm from left wall
+static const float WALL_SETPOINT     = 300.0f;  // mm from left wall
 static const float CRASH_THRESHOLD   = 105.0f;  // mm — emergency stop distance
 
 void setup()

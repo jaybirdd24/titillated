@@ -28,9 +28,9 @@ class movement
         static const float MAX_INTEGRAL = 300.0f;
 
         // Wall-following PID state (vy axis)
-        static constexpr float KP_VY = 1.5f;
+        static constexpr float KP_VY = 1.3f;
         static constexpr float KI_VY = 0.001f;
-        static constexpr float KD_VY = 0.8f;
+        static constexpr float KD_VY = 1.4f;
         static const float MAX_INTEGRAL_VY = 300.0f;
 
         float integral_vy;
