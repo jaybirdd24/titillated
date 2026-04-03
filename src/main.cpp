@@ -1,11 +1,13 @@
 #include <Arduino.h>
 #include "percepetion.h"
 #include "movement.h"
-#include "fsm.h"
 
 percepetion perception;
 movement    motors(&perception);
-fsm         stateMachine;
+
+static const int   FORWARD_SPEED      = 300;     // 0–1000
+static const float WALL_SETPOINT     = 150.0f;  // mm from left wall
+static const float CRASH_THRESHOLD   = 105.0f;  // mm — emergency stop distance
 
 void setup()
 {
@@ -13,25 +15,44 @@ void setup()
     perception.init();
     motors.enable();
 
-    // Print header for serial monitor / PuTTY
-    Serial.println("IR_R_raw,IR_R_mm,IR_LRear_raw,IR_LRear_mm");
+    // Let sensors settle, then lock in the current heading
+    delay(1000);
+    perception.update();
+    motors.latchHeading();
+
+    Serial.println("=== WALL FOLLOW START ===");
+    Serial.println("=== Distances (mm) ===");
 }
 
 void loop()
 {
     perception.update();
-    stateMachine.fsmUpdate();
 
-    // ── IR sensor test output ────────────────────────────────
-    // Prints raw ADC and converted mm for both medium IR sensors
-    // Format: CSV so you can paste into Excel/MATLAB for calibration
-    Serial.print(perception.getIRMedRightRaw());
-    Serial.print(",");
-    Serial.print(perception.getIRMedRight(), 1);
-    Serial.print(",");
-    Serial.print(perception.getIRLongRearRaw());
-    Serial.print(",");
-    Serial.println(perception.getIRLongRear(), 1);
+    // Emergency stop if any sensor reads below 100 mm
+    if (perception.isObstacleTooClose(CRASH_THRESHOLD)) {
+        motors.Stop(true);
+        static unsigned long last_warn = 0;
+        if (millis() - last_warn >= 500) {
+            last_warn = millis();
+            // Serial.println("!! OBSTACLE TOO CLOSE — STOPPED !!");
+        }
+    }
 
-    delay(100);  // 10 Hz — fast enough for calibration, slow enough to read
+    float front_mm = perception.getIRMedFront();
+    float left_mm  = perception.getIRLongLeft();
+    float right_mm = perception.getIRMedRight();
+    float rear_mm  = perception.getIRLongRear();
+    float wz       = motors.headingCorrection();
+    float vy       = motors.wallFollowCorrection(WALL_SETPOINT);
+
+    motors.drive(FORWARD_SPEED, (int)vy, (int)wz);
+
+    static unsigned long last_print = 0;
+    if (millis() - last_print >= 100) {
+        last_print = millis();
+        Serial.print(F("Front:")); Serial.print(front_mm, 1); Serial.print(F("  "));
+        Serial.print(F("Left:"));  Serial.print(left_mm,  1); Serial.print(F("  "));
+        Serial.print(F("Right:")); Serial.print(right_mm, 1); Serial.print(F("  "));
+        Serial.print(F("Rear:"));  Serial.println(rear_mm, 1);
+    }
 }

@@ -7,14 +7,12 @@
 percepetion::percepetion()
     : bno08x(-1),
       sensorValue{},
-      irBufIdx(0),
+      irMedFrontFiltered(0.0f),
+      irLongLeftFiltered(0.0f),
+      irMedRightFiltered(0.0f),
+      irLongRearFiltered(0.0f),
       usDistanceCm(0.0f)
-{
-    memset(irMedFrontBuf,  0, sizeof(irMedFrontBuf));
-    memset(irLongLeftBuf,  0, sizeof(irLongLeftBuf));
-    memset(irMedRightBuf,  0, sizeof(irMedRightBuf));
-    memset(irLongRearBuf,  0, sizeof(irLongRearBuf));
-}
+{}
 
 percepetion::~percepetion() {}
 
@@ -43,11 +41,11 @@ bool percepetion::init()
     if (!bno08x.enableReport(SH2_GYROSCOPE_UNCALIBRATED, 10000))
         return false;
 
-    // Pre-fill IR buffers with a first read so averages are valid
-    for (uint8_t i = 0; i < IR_FILTER_SAMPLES; ++i) {
-        readIR();
-        irBufIdx = (irBufIdx + 1) % IR_FILTER_SAMPLES;
-    }
+    // Seed EMA filters with first reading so they start at a real value
+    irMedFrontFiltered = (float)analogRead(PIN_IR_MED_FRONT);
+    irLongLeftFiltered = (float)analogRead(PIN_IR_LONG_LEFT);
+    irMedRightFiltered = (float)analogRead(PIN_IR_MED_RIGHT);
+    irLongRearFiltered = (float)analogRead(PIN_IR_LONG_REAR);
 
     return true;
 }
@@ -64,9 +62,8 @@ void percepetion::update()
     }
     bno08x.getSensorEvent(&sensorValue);
 
-    // IR sensors (store into rolling buffer)
+    // IR sensors (EMA low-pass filter)
     readIR();
-    irBufIdx = (irBufIdx + 1) % IR_FILTER_SAMPLES;
 
     // Ultrasonic
     readUltrasonic();
@@ -78,10 +75,10 @@ void percepetion::update()
 
 void percepetion::readIR()
 {
-    irMedFrontBuf [irBufIdx] = analogRead(PIN_IR_MED_FRONT);
-    irLongLeftBuf [irBufIdx] = analogRead(PIN_IR_LONG_LEFT);
-    irMedRightBuf [irBufIdx] = analogRead(PIN_IR_MED_RIGHT);
-    irLongRearBuf [irBufIdx] = analogRead(PIN_IR_LONG_REAR);
+    irMedFrontFiltered += IR_EMA_ALPHA * ((float)analogRead(PIN_IR_MED_FRONT) - irMedFrontFiltered);
+    irLongLeftFiltered += IR_EMA_ALPHA * ((float)analogRead(PIN_IR_LONG_LEFT) - irLongLeftFiltered);
+    irMedRightFiltered += IR_EMA_ALPHA * ((float)analogRead(PIN_IR_MED_RIGHT) - irMedRightFiltered);
+    irLongRearFiltered += IR_EMA_ALPHA * ((float)analogRead(PIN_IR_LONG_REAR) - irLongRearFiltered);
 }
 
 void percepetion::readUltrasonic()
@@ -97,13 +94,6 @@ void percepetion::readUltrasonic()
     usDistanceCm = (pulse > 0) ? (float)pulse / 58.0f : 0.0f;
 }
 
-int percepetion::averageBuf(const int *buf, uint8_t len) const
-{
-    long sum = 0;
-    for (uint8_t i = 0; i < len; ++i) sum += buf[i];
-    return (int)(sum / len);
-}
-
 // ── IR distance conversion (power-law curve fit) ──────────────────
 // Uses D = k * pow(ADC, exponent) as shown in the course tutorial.
 // IMPORTANT: You MUST calibrate these against measured distances.
@@ -114,36 +104,36 @@ int percepetion::averageBuf(const int *buf, uint8_t len) const
 float percepetion::irMedFrontRawToMm(int raw) const
 {
     // Sharp 2D120X / 2Y0A41SK on A10 (front-facing, 40-300 mm range)
-    // TODO: calibrate — using right-sensor curve as placeholder
+    // ok breaks at 27 ID: blue tac on bottom
     if (raw < 15) return 300.0f;
-    float mm = 2421.2f * pow((float)raw, -0.992f) * 10.0f;
+    float mm = 56806.0f * pow((float)raw, -1.166f);
     return constrain(mm, 40.0f, 300.0f);
 }
 
 float percepetion::irLongLeftRawToMm(int raw) const
 {
     // Sharp 2Y0A21 on A8 (left-facing, 100-800 mm range)
-    // Calibrated curve fit: D_cm = 4754.1 * ADC^-0.98
+    // breaks at 60cm. will need lpf or averaging ID: 39
     if (raw < 20) return 800.0f;
-    float mm = 4754.1f * pow((float)raw, -0.98f) * 10.0f;
+    float mm = 79426.0f * pow((float)raw, -1.078f);
     return constrain(mm, 100.0f, 800.0f);
 }
 
 float percepetion::irMedRightRawToMm(int raw) const
 {
     // Sharp 2D120X / 2Y0A41SK on A12 (right sensor, 40-300 mm range)
-    // Calibrated curve fit: D_cm = 2502.3 * ADC^-1.001
+    // roughly 4mm inaccuracy. then jumps to 20mm at 28cm ID: blue tac on top 
     if (raw < 15) return 300.0f;
-    float mm = 2502.3f * pow((float)raw, -1.001f) * 10.0f;
+    float mm = 16827.0f * pow((float)raw, -0.949f);
     return constrain(mm, 40.0f, 300.0f);
 }
 
 float percepetion::irLongRearRawToMm(int raw) const
 {
     // Sharp 2Y0A21 on A9 (rear-facing, 100-800 mm range)
-    // TODO: calibrate — using old A9 front curve as placeholder
+    // good but breaks at 65 cm ID: 06
     if (raw < 20) return 800.0f;
-    float mm = (4577.8f * pow((float)raw, -0.939f) - 2.0f) * 10.0f;
+    float mm = 128820.0f * pow((float)raw, -1.161f);
     return constrain(mm, 100.0f, 800.0f);
 }
 
@@ -165,44 +155,44 @@ float percepetion::getGyroZ()
 
 float percepetion::getIRMedFront()
 {
-    return irMedFrontRawToMm(averageBuf(irMedFrontBuf, IR_FILTER_SAMPLES));
+    return irMedFrontRawToMm((int)irMedFrontFiltered);
 }
 
 float percepetion::getIRLongLeft()
 {
-    return irLongLeftRawToMm(averageBuf(irLongLeftBuf, IR_FILTER_SAMPLES));
+    return irLongLeftRawToMm((int)irLongLeftFiltered);
 }
 
 float percepetion::getIRMedRight()
 {
-    return irMedRightRawToMm(averageBuf(irMedRightBuf, IR_FILTER_SAMPLES));
+    return irMedRightRawToMm((int)irMedRightFiltered);
 }
 
 float percepetion::getIRLongRear()
 {
-    return irLongRearRawToMm(averageBuf(irLongRearBuf, IR_FILTER_SAMPLES));
+    return irLongRearRawToMm((int)irLongRearFiltered);
 }
 
 // ── Raw ADC (for calibration / logging) ───────────────────────────
 
 int percepetion::getIRMedFrontRaw()
 {
-    return averageBuf(irMedFrontBuf, IR_FILTER_SAMPLES);
+    return (int)irMedFrontFiltered;
 }
 
 int percepetion::getIRLongLeftRaw()
 {
-    return averageBuf(irLongLeftBuf, IR_FILTER_SAMPLES);
+    return (int)irLongLeftFiltered;
 }
 
 int percepetion::getIRMedRightRaw()
 {
-    return averageBuf(irMedRightBuf, IR_FILTER_SAMPLES);
+    return (int)irMedRightFiltered;
 }
 
 int percepetion::getIRLongRearRaw()
 {
-    return averageBuf(irLongRearBuf, IR_FILTER_SAMPLES);
+    return (int)irLongRearFiltered;
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -235,6 +225,14 @@ bool percepetion::isBatteryLow()
 {
     // Below ~3.5 V per cell is the danger zone for LiPo
     return (analogRead(PIN_BATTERY) < 717);
+}
+
+bool percepetion::isObstacleTooClose(float threshold_mm)
+{
+    return getIRMedFront()  < threshold_mm ||
+           getIRLongLeft()  < threshold_mm ||
+           getIRMedRight()  < threshold_mm ||
+           getIRLongRear()  < threshold_mm;
 }
 
 void percepetion::calibrateGyro() {

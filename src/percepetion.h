@@ -19,7 +19,7 @@ constexpr unsigned long US_MAX_PULSE_US = 23200;  // ~400 cm timeout
 constexpr uint8_t PIN_BATTERY = A0;
 
 // ── Smoothing ──────────────────────────────────────────────────────
-constexpr uint8_t IR_FILTER_SAMPLES = 5;  // rolling-average window size
+constexpr float IR_EMA_ALPHA = 0.1f;  // EMA low-pass filter coefficient (0-1, lower = smoother)
 
 class percepetion
 {
@@ -28,12 +28,11 @@ private:
     Adafruit_BNO08x   bno08x;
     sh2_SensorValue_t  sensorValue;
 
-    // ── IR sensor raw ring buffers (for smoothing) ─────────────────
-    int  irMedFrontBuf [IR_FILTER_SAMPLES];
-    int  irLongLeftBuf [IR_FILTER_SAMPLES];
-    int  irMedRightBuf [IR_FILTER_SAMPLES];
-    int  irLongRearBuf [IR_FILTER_SAMPLES];
-    uint8_t irBufIdx;
+    // ── IR sensor EMA state (low-pass filtered ADC values) ──────────
+    float irMedFrontFiltered;
+    float irLongLeftFiltered;
+    float irMedRightFiltered;
+    float irLongRearFiltered;
 
     // ── Ultrasonic ────────────────────────────────────────────────
     float usDistanceCm;
@@ -41,7 +40,6 @@ private:
     // ── Helpers ───────────────────────────────────────────────────
     void  readIR();
     void  readUltrasonic();
-    int   averageBuf(const int *buf, uint8_t len) const;
 
     // Convert raw ADC (0-1023) to distance in mm.
     // NOTE: these are starting-point approximations — calibrate with
@@ -88,5 +86,8 @@ public:
     bool  isBatteryLow();             // true when below safe threshold
 
     void calibrateGyro();              // call when robot is stationary to set gyro zero
+
+    // Returns true if any sensor reads below threshold_mm
+    bool isObstacleTooClose(float threshold_mm);
 
 };

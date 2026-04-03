@@ -19,27 +19,27 @@ constexpr unsigned long US_MAX_PULSE_US = 23200;
 
 // ── IR distance conversions (copied from percepetion.cpp) ───────────
 float irMedFrontToMm(int raw) {
-    if (raw < 15) return 300.0f;
-    float mm = 2421.2f * pow((float)raw, -0.992f) * 10.0f;
-    return constrain(mm, 40.0f, 300.0f);
+    float mm = 56806.0f * pow((float)raw, -1.166f) / 10.0f; // ok breaks at 27 
+    return mm;
 }
 
-float irLongLeftToMm(int raw) {
-    if (raw < 20) return 800.0f;
-    float mm = 4754.1f * pow((float)raw, -0.98f) * 10.0f;
-    return constrain(mm, 100.0f, 800.0f);
+float irLongLeftToMm(int raw) { // breaks at 60cm. will need lpf or averaging 
+    float mm = 79426.0f * pow((float)raw, -1.078f);
+    return mm;
 }
 
 float irMedRightToMm(int raw) {
-    if (raw < 15) return 300.0f;
-    float mm = 2502.3f * pow((float)raw, -1.001f) * 10.0f;
-    return constrain(mm, 40.0f, 300.0f);
+    float mm = 16827.0f * pow((float)raw, -0.949f) ;
+    return mm;
 }
 
 float irLongRearToMm(int raw) {
-    if (raw < 20) return 800.0f;
-    float mm = (4577.8f * pow((float)raw, -0.939f) - 2.0f) * 10.0f;
-    return constrain(mm, 100.0f, 800.0f);
+    // float mm = (22392.0f * pow((float)raw, -1.264f));
+    // float mm = 4378.16 / (raw - 36.08);
+    // float mm  = 3740.1 / (raw - 65.6);
+    float mm = 128820* pow((float)raw, -1.161f)/10.0f; // good but breaks at 65 cm 
+    return mm;
+
 }
 
 // ── Ultrasonic helper ───────────────────────────────────────────────
@@ -73,10 +73,11 @@ void setup() {
 }
 
 void loop() {
-    float front = irMedFrontToMm(analogRead(PIN_IR_MED_FRONT)) / 10.0f;  // convert to cm for easier reading
+    float front = irMedFrontToMm(analogRead(PIN_IR_MED_FRONT));  // convert to cm for easier reading
     float left  = irLongLeftToMm(analogRead(PIN_IR_LONG_LEFT)) / 10.0f;
     float right = irMedRightToMm(analogRead(PIN_IR_MED_RIGHT)) / 10.0f;
-    float rear  = irLongRearToMm(analogRead(PIN_IR_LONG_REAR)) / 10.0f;
+    float rear  = irLongRearToMm(analogRead(PIN_IR_LONG_REAR));
+    // float rear = analogRead(PIN_IR_LONG_REAR);
     float usCm  = readUltrasonicCm();
 
     Serial.print(front, 1);  Serial.print('\t');  Serial.print('\t');
