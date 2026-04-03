@@ -141,7 +141,7 @@ float movement::wallFollowCorrection(float setpoint_mm)
     if (dt > 0.1f) dt = 0.1f;
 
     float measured = perception->getIRLongLeft();
-    float error = setpoint_mm - measured;  // positive → too far from wall → strafe left
+    float error = measured - setpoint_mm;  // positive → too far from wall → strafe left
 
     integral_vy += error * dt;
     integral_vy = constrain(integral_vy, -MAX_INTEGRAL_VY, MAX_INTEGRAL_VY);
