@@ -76,4 +76,11 @@ class movement
 
         // Set the desired global heading (degrees); use before/after a turn
         void setTargetHeading(float degrees);
+
+        // In-place rotation (integrates gyroZ into heading so PID stays valid)
+        void RotateCW(int speed);
+        void RotateCCW(int speed);
+
+        // Zero heading, target, and all PID state; call before MoveForward after a rotation
+        void resetHeading();
 };
