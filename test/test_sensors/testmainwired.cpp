@@ -16,7 +16,7 @@ void setup()
     motors.enable();
 
     delay(2000);
-    Serial.println("RUNNING: Drive Forward");
+    Serial.println("RUNNING: Strafe Right");
 
     unsigned long start = millis();
     while (millis() - start < TEST_DURATION) {
@@ -34,13 +34,13 @@ void setup()
         }
 
         perception.update();
-        motors.MoveForward(speed);
+        motors.MoveRight(speed);
         Serial.print("GYRO_Z: ");
         Serial.println(perception.getGyroZ(), 4);
     }
     motors.Stop();
 
-    Serial.println("DONE:    Drive Forward");
+    Serial.println("DONE:    Strafe Right");
 }
 
 void loop() {}

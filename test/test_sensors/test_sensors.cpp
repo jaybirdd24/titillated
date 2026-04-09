@@ -1,90 +1,108 @@
 /**
- * Sensor test — prints all IR + ultrasonic readings as columns on Serial.
+ * Sensor test — prints readings for the selected sensor on Serial.
+ *
+ * !! SET THE SENSOR BELOW BEFORE UPLOADING !!
  *
  * Upload with:   pio run -e test_sensors -t upload
- * Monitor with:  pio device monitor -b 115200
+ * Monitor with:  pio device monitor -e test_sensors   (115200 baud)
  */
 
 #include <Arduino.h>
 
-// ── Pin assignments (must match percepetion.h) ──────────────────────
-constexpr uint8_t PIN_IR_MED_FRONT  = A10;  // medium range, front
-constexpr uint8_t PIN_IR_LONG_LEFT  = A8;   // long range, left
-constexpr uint8_t PIN_IR_MED_RIGHT  = A12;  // medium range, right
-constexpr uint8_t PIN_IR_LONG_REAR  = A9;   // long range, rear
+// ── Select sensor (uncomment ONE) ────────────────────────────────────────────
+//#define SENSOR_FRONT    // A10  2D120X / 2Y0A41SK   medium range  ~40–300 mm
+ #define SENSOR_LEFT  // A8   2Y0A21               long range   ~100–800 mm
+// #define SENSOR_RIGHT // A12  2D120X / 2Y0A41SK   medium range  ~40–300 mm
+// #define SENSOR_REAR  // A9   2Y0A21               long range   ~100–800 mm
+// #define SENSOR_US    // trig=48 echo=49           ultrasonic
+// ─────────────────────────────────────────────────────────────────────────────
 
-constexpr uint8_t PIN_US_TRIG = 48;
-constexpr uint8_t PIN_US_ECHO = 49;
+#if defined(SENSOR_FRONT)
+  constexpr uint8_t SENSOR_PIN = A10;
+  #define SENSOR_NAME "front (A10, medium)"
+  #define SENSOR_IS_IR
+  #define IR_CONVERT(raw) (56806.0f * pow((float)(raw), -1.166f) / 10.0f)
+  #define UNIT "mm"
+
+#elif defined(SENSOR_LEFT)
+  constexpr uint8_t SENSOR_PIN = A8;
+  #define SENSOR_NAME "left (A8, long)"
+  #define SENSOR_IS_IR
+  #define IR_CONVERT(raw) (79426.0f * pow((float)(raw), -1.078f) / 10.0f)
+  #define UNIT "mm"
+
+#elif defined(SENSOR_RIGHT)
+  constexpr uint8_t SENSOR_PIN = A12;
+  #define SENSOR_NAME "right (A12, medium)"
+  #define SENSOR_IS_IR
+  #define IR_CONVERT(raw) (16827.0f * pow((float)(raw), -0.949f) / 10.0f)
+  #define UNIT "mm"
+
+#elif defined(SENSOR_REAR)
+  constexpr uint8_t SENSOR_PIN = A9;
+  #define SENSOR_NAME "rear (A9, long)"
+  #define SENSOR_IS_IR
+  #define IR_CONVERT(raw) (128820.0f * pow((float)(raw), -1.161f) / 10.0f)
+  #define UNIT "mm"
+
+#elif defined(SENSOR_US)
+  constexpr uint8_t PIN_US_TRIG = 48;
+  constexpr uint8_t PIN_US_ECHO = 49;
+  #define SENSOR_NAME "ultrasonic (trig=48 echo=49)"
+  #define SENSOR_IS_US
+  #define UNIT "cm"
+
+#else
+  #error "No sensor selected — uncomment one SENSOR_x define at the top of test_sensors.cpp"
+#endif
+
+#ifdef SENSOR_IS_US
 constexpr unsigned long US_MAX_PULSE_US = 23200;
 
-// ── IR distance conversions (copied from percepetion.cpp) ───────────
-float irMedFrontToMm(int raw) {
-    float mm = 56806.0f * pow((float)raw, -1.166f) / 10.0f; // ok breaks at 27 
-    return mm;
-}
-
-float irLongLeftToMm(int raw) { // breaks at 60cm. will need lpf or averaging 
-    float mm = 79426.0f * pow((float)raw, -1.078f);
-    return mm;
-}
-
-float irMedRightToMm(int raw) {
-    float mm = 16827.0f * pow((float)raw, -0.949f) ;
-    return mm;
-}
-
-float irLongRearToMm(int raw) {
-    // float mm = (22392.0f * pow((float)raw, -1.264f));
-    // float mm = 4378.16 / (raw - 36.08);
-    // float mm  = 3740.1 / (raw - 65.6);
-    float mm = 128820* pow((float)raw, -1.161f)/10.0f; // good but breaks at 65 cm 
-    return mm;
-
-}
-
-// ── Ultrasonic helper ───────────────────────────────────────────────
-float readUltrasonicCm() {
+static float readUltrasonic() {
     digitalWrite(PIN_US_TRIG, LOW);
     delayMicroseconds(2);
     digitalWrite(PIN_US_TRIG, HIGH);
     delayMicroseconds(10);
     digitalWrite(PIN_US_TRIG, LOW);
-
     unsigned long pulse = pulseIn(PIN_US_ECHO, HIGH, US_MAX_PULSE_US);
     return (pulse > 0) ? (float)pulse / 58.0f : 0.0f;
 }
+#endif
 
 void setup() {
     Serial.begin(115200);
+    while (!Serial) {}
 
-    pinMode(PIN_IR_MED_FRONT, INPUT);
-    pinMode(PIN_IR_LONG_LEFT, INPUT);
-    pinMode(PIN_IR_MED_RIGHT, INPUT);
-    pinMode(PIN_IR_LONG_REAR, INPUT);
+#ifdef SENSOR_IS_IR
+    pinMode(SENSOR_PIN, INPUT);
+#endif
+#ifdef SENSOR_IS_US
     pinMode(PIN_US_TRIG, OUTPUT);
     pinMode(PIN_US_ECHO, INPUT);
     digitalWrite(PIN_US_TRIG, LOW);
+#endif
 
     delay(500);
 
-    // Print header
-    Serial.println(F("Front_mm(M)\tLeft_mm(L)\tRight_mm(M)\tRear_mm(L)\tUS_cm"));
-    Serial.println(F("-----------\t----------\t-----------\t----------\t-----"));
+    Serial.print(F("# Sensor: "));
+    Serial.println(F(SENSOR_NAME));
+    Serial.println(F("raw_adc\tdist_" UNIT));
+    Serial.println(F("-------\t--------"));
 }
 
 void loop() {
-    float front = irMedFrontToMm(analogRead(PIN_IR_MED_FRONT));  // convert to cm for easier reading
-    float left  = irLongLeftToMm(analogRead(PIN_IR_LONG_LEFT)) / 10.0f;
-    float right = irMedRightToMm(analogRead(PIN_IR_MED_RIGHT)) / 10.0f;
-    float rear  = irLongRearToMm(analogRead(PIN_IR_LONG_REAR));
-    // float rear = analogRead(PIN_IR_LONG_REAR);
-    float usCm  = readUltrasonicCm();
+#ifdef SENSOR_IS_IR
+    int   raw  = analogRead(SENSOR_PIN);
+    float dist = IR_CONVERT(raw);
+    Serial.print(raw);
+    Serial.print('\t');
+    Serial.println(dist, 1);
+#endif
+#ifdef SENSOR_IS_US
+    float dist = readUltrasonic();
+    Serial.println(dist, 1);
+#endif
 
-    Serial.print(front, 1);  Serial.print('\t');  Serial.print('\t');
-    Serial.print(left, 1);   Serial.print('\t');  Serial.print('\t');
-    Serial.print(right, 1);  Serial.print('\t');  Serial.print('\t');
-    Serial.print(rear, 1);   Serial.print('\t');  Serial.print('\t');
-    Serial.println(usCm, 1);
-
-    delay(200);  // ~5 Hz update rate
+    delay(200);
 }
