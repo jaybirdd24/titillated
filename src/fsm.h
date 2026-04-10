@@ -5,14 +5,10 @@
 
 enum HomingState {
     HOMING_IDLE = 0,
-    HOMING_ROTATE_SCAN,
-    HOMING_ROTATE_TO_MIN,
-    HOMING_APPROACH_WALL,
-    HOMING_SCAN_SIDE_RIGHT,
-    HOMING_SCAN_SIDE_LEFT,
-    HOMING_ROTATE_TO_SIDE,
-    HOMING_APPROACH_SIDE,
-    HOMING_LINEUP,
+    HOMING_ROTATE_SCAN,       // spin 360°, record closest US distance + heading
+    HOMING_ROTATE_TO_MIN,     // rotate back to face that wall
+    HOMING_APPROACH_WALL,     // move forward until front IR <= 150 mm
+    HOMING_APPROACH_SIDE,     // move left until left IR <= 150 mm
     HOMING_DONE
 };
 
@@ -28,12 +24,6 @@ class fsm
 
         float minUsDist;
         float minUsHeading;
-        float scanStartHeading;
-        float rightWallCm;
-        float rightWallHeading;
-        float leftWallCm;
-        float leftWallHeading;
-        float sideTargetHeading;
 
         void updateHeading();
 
@@ -44,5 +34,4 @@ class fsm
         void fsmHoming();
         HomingState getState()   const { return homingState; }
         float       getHeading() const { return fsmHeading; }
-        void startLineup() { lastUpdateUs = micros(); homingState = HOMING_LINEUP; }
 };
