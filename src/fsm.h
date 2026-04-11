@@ -3,35 +3,72 @@
 #include "percepetion.h"
 #include "movement.h"
 
-enum HomingState {
+enum RobotState {
+    // ── Homing ────────────────────────────────────────────────────────────────
     HOMING_IDLE = 0,
-    HOMING_ROTATE_SCAN,       // spin 360°, record closest US distance + heading
-    HOMING_ROTATE_TO_MIN,     // rotate back to face that wall
-    HOMING_APPROACH_WALL,     // move forward until front IR <= 150 mm
-    HOMING_APPROACH_SIDE,     // move left until left IR <= 150 mm
-    HOMING_DONE
+    HOMING_SCAN,            // spin 360°, record top-N closest US readings
+    HOMING_RETURN,          // rotate CW back to averaged closest heading
+    HOMING_APPROACH_WALL,   // move right until US < 15 cm
+    HOMING_APPROACH_FWD,    // move forward until front IR < 150 mm
+    // ── Run ───────────────────────────────────────────────────────────────────
+    RUN_MOVE_DOWN,
+    RUN_STRAFE_LEFT_A,
+    RUN_MOVE_UP,
+    RUN_STRAFE_LEFT_B,
+    RUN_FINAL_MOVE_DOWN,
+    RUN_FINAL_MOVE_UP,
+    // ── Done ──────────────────────────────────────────────────────────────────
+    STATE_DONE
 };
 
 class fsm
 {
-    private:
-        percepetion *perception;
-        movement    *motors;
+public:
+    fsm(percepetion *perception, movement *motors);
+    ~fsm();
 
-        HomingState   homingState;
-        float         fsmHeading;
-        unsigned long lastUpdateUs;
+    void        fsmUpdate();
+    RobotState  getState()   const { return state; }
+    float       getHeading() const { return heading; }
 
-        float minUsDist;
-        float minUsHeading;
+private:
+    percepetion  *perception;
+    movement     *motors;
+    RobotState    state;
 
-        void updateHeading();
+    // ── Heading integration ───────────────────────────────────────────────────
+    float         heading;
+    unsigned long lastUpdateUs;
+    void          updateHeading();
 
-    public:
-        fsm(percepetion *perception, movement *motors);
-        ~fsm();
-        void fsmUpdate();
-        void fsmHoming();
-        HomingState getState()   const { return homingState; }
-        float       getHeading() const { return fsmHeading; }
+    // ── Homing state ─────────────────────────────────────────────────────────
+    static const int TOP_N = 10;
+    float  topDist[TOP_N];
+    float  topHead[TOP_N];
+    int    topCount;
+    float  minUsDist;
+    float  minUsHeading;
+    float  lastValidUs;
+    int    usReadingCount;
+    unsigned long lastSampleMs;
+    float  returnStartHeading;
+    long   returnExtraStart;
+    unsigned long lastSampleUsMs;
+
+    void insertTopN(float dist, float head);
+    float avgTopHeading();
+    float avgTopDist();
+
+    // ── Run state ─────────────────────────────────────────────────────────────
+    unsigned long strafeStart;
+    bool          leftWallSeen;
+    int           leftNonIgnoreCount;
+    int           leftIgnoreCount;
+    unsigned long leftLastCountedMs;
+
+    bool leftWallDetected();
+
+    // ── FSM phases ────────────────────────────────────────────────────────────
+    void doHoming();
+    void doRun();
 };

@@ -99,15 +99,20 @@ void loop() {
     case SCAN:
         updateHeading();
         {
-            float usDist = perception.getUltrasonicCm();
-            usReadingCount++;
-            bool valid = (usReadingCount > US_WARMUP_READINGS) &&
-                         (usDist > 0.0f) &&
-                         (lastValidUs < 0.0f || fabsf(usDist - lastValidUs) <= US_SPIKE_THRESHOLD);
-            if (valid) {
-                lastValidUs = usDist;
-                insertTopN(usDist, heading);
-                if (usDist < minUsDist) minUsDist = usDist;
+            static unsigned long lastSampleMs = 0;
+            unsigned long now = millis();
+            if (now - lastSampleMs >= 100) {
+                lastSampleMs = now;
+                float usDist = perception.getUltrasonicCm();
+                usReadingCount++;
+                bool valid = (usReadingCount > US_WARMUP_READINGS) &&
+                             (usDist > 0.0f) &&
+                             (lastValidUs < 0.0f || fabsf(usDist - lastValidUs) <= US_SPIKE_THRESHOLD);
+                if (valid) {
+                    lastValidUs = usDist;
+                    insertTopN(usDist, heading);
+                    if (usDist < minUsDist) minUsDist = usDist;
+                }
             }
         }
         motors.RotateCCW(ROTATE_SPEED);
