@@ -173,6 +173,34 @@ void movement::MoveRight(int speed)
     drive(0, -speed, (int)headingCorrection());
 }
 
+void movement::RotateCW(int speed)
+{
+    unsigned long now = micros();
+    float dt = (now - last_update_us) / 1e6f;
+    last_update_us = now;
+    heading += perception->getGyroZ() * (180.0f / PI) * dt;
+    setMotorSpeeds(speed, speed, speed, speed);
+}
+
+void movement::RotateCCW(int speed)
+{
+    unsigned long now = micros();
+    float dt = (now - last_update_us) / 1e6f;
+    last_update_us = now;
+    heading += perception->getGyroZ() * (180.0f / PI) * dt;
+    setMotorSpeeds(-speed, -speed, -speed, -speed);
+}
+
+void movement::resetHeading()
+{
+    heading = 0.0f;
+    target_heading = 0.0f;
+    integral = 0.0f;
+    prev_error = 0.0f;
+    filtered_derivative = 0.0f;
+    last_update_us = micros();
+}
+
 void movement::Stop(bool immediate)
 {
     if (immediate) {

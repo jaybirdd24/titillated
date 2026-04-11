@@ -1,58 +1,57 @@
 #include <Arduino.h>
 #include "percepetion.h"
 #include "movement.h"
+#include "fsm.h"
 
 percepetion perception;
 movement    motors(&perception);
+fsm         stateMachine(&perception, &motors);
 
-static const int   FORWARD_SPEED      = 300;     // 0–1000
-static const float WALL_SETPOINT     = 300.0f;  // mm from left wall
-static const float CRASH_THRESHOLD   = 105.0f;  // mm — emergency stop distance
-
-void setup()
-{
-    Serial.begin(9600);
-    perception.init();
-    motors.enable();
-
-    // Let sensors settle, then lock in the current heading
-    delay(1000);
-    perception.update();
-    motors.latchHeading();
-
-    Serial.println("=== WALL FOLLOW START ===");
-    Serial.println("=== Distances (mm) ===");
+static const char* stateName(RobotState s) {
+    switch (s) {
+        case HOMING_IDLE:          return "HOMING_IDLE";
+        case HOMING_SCAN:          return "HOMING_SCAN";
+        case HOMING_RETURN:        return "HOMING_RETURN";
+        case HOMING_APPROACH_WALL: return "HOMING_APPROACH_WALL";
+        case HOMING_APPROACH_FWD:  return "HOMING_APPROACH_FWD";
+        case RUN_MOVE_DOWN:        return "RUN_MOVE_DOWN";
+        case RUN_STRAFE_LEFT_A:    return "RUN_STRAFE_A";
+        case RUN_MOVE_UP:          return "RUN_MOVE_UP";
+        case RUN_STRAFE_LEFT_B:    return "RUN_STRAFE_B";
+        case RUN_FINAL_MOVE_DOWN:  return "RUN_FINAL_DOWN";
+        case RUN_FINAL_MOVE_UP:    return "RUN_FINAL_UP";
+        case STATE_DONE:           return "DONE";
+        default:                   return "UNKNOWN";
+    }
 }
 
-void loop()
-{
-    perception.update();
+void setup() {
+    Serial.begin(115200);
+    perception.init();
+    motors.enable();
+    delay(2000);
 
-    // Emergency stop if any sensor reads below 100 mm
-    if (perception.isObstacleTooClose(CRASH_THRESHOLD)) {
-        motors.Stop(true);
-        static unsigned long last_warn = 0;
-        if (millis() - last_warn >= 500) {
-            last_warn = millis();
-            // Serial.println("!! OBSTACLE TOO CLOSE — STOPPED !!");
-        }
+    // settle gyro
+    unsigned long settle = millis();
+    while (millis() - settle < 500) {
+        perception.update();
     }
 
-    float front_mm = perception.getIRMedFront();
-    float left_mm  = perception.getIRLongLeft();
-    float right_mm = perception.getIRMedRight();
-    float rear_mm  = perception.getIRLongRear();
-    float wz       = motors.headingCorrection();
-    float vy       = motors.wallFollowCorrection(WALL_SETPOINT);
+    Serial.println("=== START ===");
+    Serial.println("State,Heading,US_cm");
+}
 
-    motors.drive(FORWARD_SPEED, (int)vy, (int)wz);
+void loop() {
+    perception.update();
+    stateMachine.fsmUpdate();
 
-    static unsigned long last_print = 0;
-    if (millis() - last_print >= 100) {
-        last_print = millis();
-        Serial.print(F("Front:")); Serial.print(front_mm, 1); Serial.print(F("  "));
-        Serial.print(F("Left:"));  Serial.print(left_mm,  1); Serial.print(F("  "));
-        Serial.print(F("Right:")); Serial.print(right_mm, 1); Serial.print(F("  "));
-        Serial.print(F("Rear:"));  Serial.println(rear_mm, 1);
+    static unsigned long lastPrint = 0;
+    if (millis() - lastPrint >= 100) {
+        lastPrint = millis();
+        Serial.print(stateName(stateMachine.getState()));
+        Serial.print(",");
+        Serial.print(stateMachine.getHeading(), 1);
+        Serial.print(",");
+        Serial.println(perception.getUltrasonicCm(), 1);
     }
 }
