@@ -1,12 +1,9 @@
 #pragma once
 
-class comms
-{
-    private:
+#include <Arduino.h>
 
-    public:
-        comms();
-        ~comms();
-
-
+class comms {
+public:
+    void init(unsigned long baud = 115200);
+    void sendCSV(unsigned long timeMs, float x, float y, float yaw);
 };

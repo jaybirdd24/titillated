@@ -2,10 +2,14 @@
 #include "percepetion.h"
 #include "movement.h"
 #include "fsm.h"
+#include "coordinates.h"
+#include "comms.h"
 
 percepetion perception;
 movement    motors(&perception);
 fsm         stateMachine(&perception, &motors);
+coordinates coords(&stateMachine, &motors, &perception);
+comms       wireless;
 
 static const char* stateName(RobotState s) {
     switch (s) {
@@ -37,21 +41,33 @@ void setup() {
         perception.update();
     }
 
+    wireless.init();
+
     Serial.println("=== START ===");
-    Serial.println("State,Heading,US_cm");
+    Serial.println("State,Heading,US_cm,X_mm,Y_mm");
 }
 
 void loop() {
     perception.update();
     stateMachine.fsmUpdate();
+    coords.update();
 
     static unsigned long lastPrint = 0;
     if (millis() - lastPrint >= 100) {
         lastPrint = millis();
+
+        // USB serial telemetry
         Serial.print(stateName(stateMachine.getState()));
         Serial.print(",");
         Serial.print(stateMachine.getHeading(), 1);
         Serial.print(",");
-        Serial.println(perception.getUltrasonicCm(), 1);
+        Serial.print(perception.getUltrasonicCm(), 1);
+        Serial.print(",");
+        Serial.print(coords.getX(), 1);
+        Serial.print(",");
+        Serial.println(coords.getY(), 1);
+
+        // Wireless CSV logging
+        wireless.sendCSV(millis(), coords.getX(), coords.getY(), coords.getYaw());
     }
 }

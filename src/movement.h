@@ -81,6 +81,9 @@ class movement
         void RotateCW(int speed);
         void RotateCCW(int speed);
 
+        // Current integrated heading in degrees
+        float getHeading() const { return heading; }
+
         // Zero heading, target, and all PID state; call before MoveForward after a rotation
         void resetHeading();
 };
