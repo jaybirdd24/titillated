@@ -74,6 +74,33 @@ static const int   APPROACH_SPEED    = 200;
 static const float FORWARD_STOP_MM   = 150.0f;  // stop forward when front IR < this (mm)
 static const int   FORWARD_SPEED     = 200;
 
+// ── US wall-follow PI (APPROACH_FORWARD) ─────────────────────────────────────
+static const float WF_SETPOINT_CM = 15.0f;  // target distance from right wall (cm)
+static const float WF_KP          = 15.0f;   // tune: higher = more aggressive correction
+static const float WF_KI          = 0.5f;   // tune: reduces steady-state offset
+static const float WF_MAX_INT     = 200.0f;
+
+static float         wf_integral  = 0.0f;
+static unsigned long wf_last_us   = 0;
+
+static int wfCorrection() {
+    unsigned long now = micros();
+    float dt = (now - wf_last_us) / 1e6f;
+    wf_last_us = now;
+    if (dt > 0.1f) dt = 0.1f;
+
+    float dist = perception.getUltrasonicCm();
+    if (dist <= 0.0f) return 0;  // no echo — no correction
+
+    float error = dist - WF_SETPOINT_CM;  // +ve = too far → strafe right (vy-)
+    wf_integral += error * dt;
+    wf_integral = constrain(wf_integral, -WF_MAX_INT, WF_MAX_INT);
+
+    float vy = WF_KP * error + WF_KI * wf_integral;
+    return (int)constrain(-vy, -300, 300);  // negate: vy+ = left, vy- = right
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
 enum State { SCAN, RETURN, APPROACH, APPROACH_FORWARD, DONE };
 static State state = SCAN;
 
@@ -176,7 +203,8 @@ void loop() {
                 Serial.println(frontMm, 1);
                 state = DONE;
             } else {
-                motors.MoveForward(FORWARD_SPEED);
+                int vy = wfCorrection();
+                motors.drive(FORWARD_SPEED, vy, (int)motors.headingCorrection());
             }
         }
         break;
