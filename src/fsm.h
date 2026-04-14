@@ -2,6 +2,7 @@
 
 #include "percepetion.h"
 #include "movement.h"
+#include "pose_estimator.h"
 
 enum RobotState {
     // ── Homing ────────────────────────────────────────────────────────────────
@@ -24,22 +25,26 @@ enum RobotState {
 class fsm
 {
 public:
-    fsm(percepetion *perception, movement *motors);
+    fsm(percepetion *perception, movement *motors, pose_estimator *estimator);
     ~fsm();
 
     void        fsmUpdate();
     RobotState  getState()   const { return state; }
-    float       getHeading() const { return heading; }
+    float       getHeading() const;
+    Pose2D      getPose()    const;
 
 private:
     percepetion  *perception;
     movement     *motors;
+    pose_estimator *estimator;
     RobotState    state;
 
-    // ── Heading integration ───────────────────────────────────────────────────
-    float         heading;
-    unsigned long lastUpdateUs;
-    void          updateHeading();
+    // ── Homing turn progress ──────────────────────────────────────────────────
+    float         scanAccumulatedDeg;
+    float         returnAccumulatedDeg;
+    float         previousHeadingDeg;
+    bool          previousHeadingValid;
+    float         headingDeltaDeg();
 
     // ── Homing state ─────────────────────────────────────────────────────────
     static const int TOP_N = 10;
@@ -51,16 +56,15 @@ private:
     float  lastValidUs;
     int    usReadingCount;
     unsigned long lastSampleMs;
-    float  returnStartHeading;
     long   returnExtraStart;
-    unsigned long lastSampleUsMs;
 
     void insertTopN(float dist, float head);
     float avgTopHeading();
     float avgTopDist();
+    void initializePoseFromHoming();
 
     // ── Run state ─────────────────────────────────────────────────────────────
-    unsigned long strafeStart;
+    float         strafeTargetX;
     bool          leftWallSeen;
     int           leftNonIgnoreCount;
     int           leftIgnoreCount;

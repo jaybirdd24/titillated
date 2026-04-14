@@ -2,10 +2,13 @@
 #include "percepetion.h"
 #include "movement.h"
 #include "fsm.h"
+#include "pose_estimator.h"
+#include "robot_config.h"
 
 percepetion perception;
-movement    motors(&perception);
-fsm         stateMachine(&perception, &motors);
+pose_estimator estimator;
+movement    motors(&perception, &estimator);
+fsm         stateMachine(&perception, &motors, &estimator);
 
 static const char* stateName(RobotState s) {
     switch (s) {
@@ -28,6 +31,7 @@ static const char* stateName(RobotState s) {
 void setup() {
     Serial.begin(115200);
     perception.init();
+    estimator.begin();
     motors.enable();
     delay(2000);
 
@@ -36,22 +40,57 @@ void setup() {
     while (millis() - settle < 500) {
         perception.update();
     }
+    perception.calibrateGyro();
+    motors.latchHeading();
 
     Serial.println("=== START ===");
-    Serial.println("State,Heading,US_cm");
+    Serial.println("State,x_mm,y_mm,theta_deg,front_mm,rear_mm,left_mm,right_mm,us_mm");
 }
 
 void loop() {
     perception.update();
+
+    static unsigned long lastPredictUs = 0;
+    unsigned long nowUs = micros();
+    float dt = 0.0f;
+    if (lastPredictUs != 0) {
+        dt = (nowUs - lastPredictUs) / 1e6f;
+    }
+    lastPredictUs = nowUs;
+
+    SensorReadings readings = {
+        perception.getIRMedFront(),
+        perception.getIRLongRear(),
+        perception.getIRLongLeft(),
+        perception.getIRMedRight(),
+        perception.getUltrasonicMm(),
+        perception.getGyroZ()
+    };
+
+    estimator.predict(motors.getCurrentMotionCommand(), readings.gyro_z_rad_s, dt);
+    estimator.correct(readings);
     stateMachine.fsmUpdate();
 
     static unsigned long lastPrint = 0;
     if (millis() - lastPrint >= 100) {
         lastPrint = millis();
+        Pose2D pose = stateMachine.getPose();
         Serial.print(stateName(stateMachine.getState()));
+        Serial.print(",");
+        Serial.print(pose.x_mm, 1);
+        Serial.print(",");
+        Serial.print(pose.y_mm, 1);
         Serial.print(",");
         Serial.print(stateMachine.getHeading(), 1);
         Serial.print(",");
-        Serial.println(perception.getUltrasonicCm(), 1);
+        Serial.print(readings.front_mm, 1);
+        Serial.print(",");
+        Serial.print(readings.rear_mm, 1);
+        Serial.print(",");
+        Serial.print(readings.left_mm, 1);
+        Serial.print(",");
+        Serial.print(readings.right_mm, 1);
+        Serial.print(",");
+        Serial.println(readings.us_right_mm, 1);
     }
 }

@@ -2,6 +2,7 @@
 
 #include <Servo.h>
 #include "percepetion.h"
+#include "pose_estimator.h"
 
 class movement
 {
@@ -12,9 +13,9 @@ class movement
         Servo right_front_motor;
 
         percepetion *perception;
+        pose_estimator *estimator;
 
-        // Heading PID state
-        float heading;          // integrated heading (degrees)
+        // Heading PID state; estimator owns the actual heading.
         float target_heading;
         unsigned long last_update_us;
 
@@ -25,13 +26,13 @@ class movement
         float prev_error;
         float filtered_derivative;
 
-        static const float MAX_INTEGRAL = 300.0f;
+        static constexpr float MAX_INTEGRAL = 300.0f;
 
         // Wall-following PID state (vy axis)
         static constexpr float KP_VY = 1.3f;
         static constexpr float KI_VY = 0.001f;
         static constexpr float KD_VY = 1.4f;
-        static const float MAX_INTEGRAL_VY = 300.0f;
+        static constexpr float MAX_INTEGRAL_VY = 300.0f;
 
         float integral_vy;
         float prev_error_vy;
@@ -46,15 +47,24 @@ class movement
         // Sets raw PWM microseconds on all 4 motors (1500 = stop)
         // Applies slew-rate limiting to smooth speed transitions
         void setMotorSpeeds(int lf, int lr, int rr, int rf);
+        float speedToForwardMmS(int speed) const;
+        float speedToBackwardMmS(int speed) const;
+        float speedToLeftMmS(int speed) const;
+        float speedToRightMmS(int speed) const;
+        float currentHeadingDeg() const;
+        void  resetHeadingPid();
+
+        MotionCommand current_motion;
 
     public:
-        movement(percepetion *perception);
+        movement(percepetion *perception, pose_estimator *estimator = nullptr);
         ~movement();
 
         void enable();           // attach servos to pins
         void disable();          // detach servos
+        void setPoseEstimator(pose_estimator *next_estimator);
 
-        // Integrates gyroZ into heading, returns wz PID correction value
+        // Uses the estimator heading, returns wz PID correction value
         float headingCorrection();
 
         // Record target_heading and reset PID state; call when starting a new motion
@@ -81,6 +91,8 @@ class movement
         void RotateCW(int speed);
         void RotateCCW(int speed);
 
-        // Zero heading, target, and all PID state; call before MoveForward after a rotation
+        // Reset target heading and PID state against the estimator heading.
         void resetHeading();
+
+        MotionCommand getCurrentMotionCommand() const;
 };

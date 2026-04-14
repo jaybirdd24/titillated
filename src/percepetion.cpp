@@ -11,7 +11,8 @@ percepetion::percepetion()
       irLongLeftFiltered(0.0f),
       irMedRightFiltered(0.0f),
       irLongRearFiltered(0.0f),
-      usDistanceCm(0.0f)
+      usDistanceCm(0.0f),
+      gyro_bias(0.0f)
 {}
 
 percepetion::~percepetion() {}
@@ -144,7 +145,7 @@ float percepetion::irLongRearRawToMm(int raw) const
 float percepetion::getGyroZ()
 {
     if (sensorValue.sensorId == SH2_GYROSCOPE_UNCALIBRATED) {
-        return sensorValue.un.gyroscope.z;
+        return sensorValue.un.gyroscope.z - gyro_bias;
     }
     return 0.0f;
 }
@@ -204,6 +205,11 @@ float percepetion::getUltrasonicCm()
     return usDistanceCm;
 }
 
+float percepetion::getUltrasonicMm()
+{
+    return usDistanceCm * 10.0f;
+}
+
 // ═══════════════════════════════════════════════════════════════════
 //  Battery monitoring
 // ═══════════════════════════════════════════════════════════════════
@@ -236,14 +242,16 @@ bool percepetion::isObstacleTooClose(float threshold_mm)
 }
 
 void percepetion::calibrateGyro() {
-    long sum = 0;
+    float sum = 0.0f;
     uint16_t samples = 500;
+    uint16_t used = 0;
     for (uint16_t i = 0; i < samples; ++i) {
         bno08x.getSensorEvent(&sensorValue);
         if (sensorValue.sensorId == SH2_GYROSCOPE_UNCALIBRATED) {
             sum += sensorValue.un.gyroscope.z;
+            used++;
         }
         delay(5);  // sample at ~200 Hz
     }
-    gyro_bias = (float)sum / samples;
+    gyro_bias = used > 0 ? sum / (float)used : 0.0f;
 }

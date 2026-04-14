@@ -79,6 +79,7 @@ public:
 
     // ── Ultrasonic getter ─────────────────────────────────────────
     float getUltrasonicCm();  // distance in cm, 0 if no echo
+    float getUltrasonicMm();  // distance in mm, 0 if no echo
 
     // ── Battery ───────────────────────────────────────────────────
     int   getBatteryRaw();            // raw ADC 0-1023

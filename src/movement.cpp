@@ -1,5 +1,6 @@
 #include "movement.h"
 #include <Arduino.h>
+#include "robot_config.h"
 
 // Pin assignments matching base code shield pinout
 static const byte PIN_LEFT_FRONT  = 46;
@@ -15,15 +16,33 @@ static const float DEFAULT_KP = 30.0f;
 static const float DEFAULT_KI = 0.01f;
 static const float DEFAULT_KD = 9.0f;
 
-movement::movement(percepetion *perception)
+namespace {
+
+float wrapDegrees(float angle_deg)
+{
+    while (angle_deg > 180.0f) angle_deg -= 360.0f;
+    while (angle_deg <= -180.0f) angle_deg += 360.0f;
+    return angle_deg;
+}
+
+float scaleSpeed(int speed, float mm_per_sec_at_full)
+{
+    return (float)constrain(speed, -1000, 1000) * (mm_per_sec_at_full / 1000.0f);
+}
+
+}  // namespace
+
+movement::movement(percepetion *perception, pose_estimator *estimator)
     : perception(perception),
-      heading(0.0f), target_heading(0.0f),
+      estimator(estimator),
+      target_heading(0.0f),
       last_update_us(0),
       Kp(DEFAULT_KP), Ki(DEFAULT_KI), Kd(DEFAULT_KD),
       integral(0.0f), prev_error(0.0f), filtered_derivative(0.0f),
       integral_vy(0.0f), prev_error_vy(0.0f), filtered_derivative_vy(0.0f),
       last_wall_us(0),
-      current_speeds{0, 0, 0, 0}, last_slew_us(0)
+      current_speeds{0, 0, 0, 0}, last_slew_us(0),
+      current_motion{0.0f, 0.0f, false}
 {
 }
 
@@ -40,6 +59,8 @@ void movement::enable()
     last_update_us = micros();
     last_slew_us   = micros();
     last_wall_us   = micros();
+    current_motion = {0.0f, 0.0f, false};
+    target_heading = currentHeadingDeg();
 }
 
 void movement::disable()
@@ -53,6 +74,13 @@ void movement::disable()
     pinMode(PIN_LEFT_REAR,   INPUT);
     pinMode(PIN_RIGHT_REAR,  INPUT);
     pinMode(PIN_RIGHT_FRONT, INPUT);
+}
+
+void movement::setPoseEstimator(pose_estimator *next_estimator)
+{
+    estimator = next_estimator;
+    target_heading = currentHeadingDeg();
+    resetHeadingPid();
 }
 
 void movement::setMotorSpeeds(int lf, int lr, int rr, int rf)
@@ -85,11 +113,9 @@ void movement::setMotorSpeeds(int lf, int lr, int rr, int rf)
 
 void movement::latchHeading()
 {
-    // Hold current global heading as the new target; reset only PID state
-    target_heading = heading;
-    integral = 0.0f;
-    prev_error = 0.0f;
-    filtered_derivative = 0.0f;
+    // Hold current estimator heading as the new target; reset only PID state.
+    target_heading = currentHeadingDeg();
+    resetHeadingPid();
     last_update_us = micros();
 }
 
@@ -104,11 +130,11 @@ float movement::headingCorrection()
     float dt = (now - last_update_us) / 1e6f;
     last_update_us = now;
 
-    // Integrate gyroZ (rad/s) into heading (degrees)
-    float gyroZ = perception->getGyroZ();
-    heading += gyroZ * (180.0f / PI) * dt;
+    if (dt <= 0.0f) {
+        return 0.0f;
+    }
 
-    float error = -target_heading + heading;
+    float error = wrapDegrees(currentHeadingDeg() - target_heading);
 
     integral += error * dt;
     integral = constrain(integral, -MAX_INTEGRAL, MAX_INTEGRAL);
@@ -155,49 +181,44 @@ float movement::wallFollowCorrection(float setpoint_mm)
 
 void movement::MoveForward(int speed)
 {
+    current_motion = {speedToForwardMmS(speed), 0.0f, false};
     drive(speed, 0, (int)headingCorrection());
 }
 
 void movement::MoveBackward(int speed)
 {
+    current_motion = {-speedToBackwardMmS(speed), 0.0f, false};
     drive(-speed, 0, (int)headingCorrection());
 }
 
 void movement::MoveLeft(int speed)
 {
+    current_motion = {0.0f, speedToLeftMmS(speed), false};
     drive(0, speed, (int)headingCorrection());
 }
 
 void movement::MoveRight(int speed)
 {
+    current_motion = {0.0f, -speedToRightMmS(speed), false};
     drive(0, -speed, (int)headingCorrection());
 }
 
 void movement::RotateCW(int speed)
 {
-    unsigned long now = micros();
-    float dt = (now - last_update_us) / 1e6f;
-    last_update_us = now;
-    heading += perception->getGyroZ() * (180.0f / PI) * dt;
+    current_motion = {0.0f, 0.0f, true};
     setMotorSpeeds(speed, speed, speed, speed);
 }
 
 void movement::RotateCCW(int speed)
 {
-    unsigned long now = micros();
-    float dt = (now - last_update_us) / 1e6f;
-    last_update_us = now;
-    heading += perception->getGyroZ() * (180.0f / PI) * dt;
+    current_motion = {0.0f, 0.0f, true};
     setMotorSpeeds(-speed, -speed, -speed, -speed);
 }
 
 void movement::resetHeading()
 {
-    heading = 0.0f;
-    target_heading = 0.0f;
-    integral = 0.0f;
-    prev_error = 0.0f;
-    filtered_derivative = 0.0f;
+    target_heading = currentHeadingDeg();
+    resetHeadingPid();
     last_update_us = micros();
 }
 
@@ -213,5 +234,43 @@ void movement::Stop(bool immediate)
     } else {
         setMotorSpeeds(0, 0, 0, 0);
     }
+    current_motion = {0.0f, 0.0f, false};
     latchHeading();
+}
+
+MotionCommand movement::getCurrentMotionCommand() const
+{
+    return current_motion;
+}
+
+float movement::speedToForwardMmS(int speed) const
+{
+    return scaleSpeed(speed, robot_config::kForwardMmPerSecAtFull);
+}
+
+float movement::speedToBackwardMmS(int speed) const
+{
+    return scaleSpeed(speed, robot_config::kBackwardMmPerSecAtFull);
+}
+
+float movement::speedToLeftMmS(int speed) const
+{
+    return scaleSpeed(speed, robot_config::kLeftMmPerSecAtFull);
+}
+
+float movement::speedToRightMmS(int speed) const
+{
+    return scaleSpeed(speed, robot_config::kRightMmPerSecAtFull);
+}
+
+float movement::currentHeadingDeg() const
+{
+    return estimator != nullptr ? estimator->getHeadingDeg() : 0.0f;
+}
+
+void movement::resetHeadingPid()
+{
+    integral = 0.0f;
+    prev_error = 0.0f;
+    filtered_derivative = 0.0f;
 }

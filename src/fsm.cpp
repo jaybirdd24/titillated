@@ -1,6 +1,9 @@
 #include "fsm.h"
+
 #include <Arduino.h>
 #include <math.h>
+
+#include "robot_config.h"
 
 // ── Tuning ────────────────────────────────────────────────────────────────────
 static const int   ROTATE_SPEED       = 150;
@@ -16,21 +19,67 @@ static const int   FORWARD_SPEED      = 200;
 static const int   MOVE_SPEED         = 200;
 static const float REAR_STOP_MM       = 150.0f;
 static const float FRONT_STOP_MM      = 150.0f;
-static const float LEFT_STOP_MM       = 120.0f;
 static const float LEFT_IGNORE_MM     = 110.0f;
 static const int   LEFT_CONFIRM_N     = 20;
 static const int   LEFT_RESET_N       = 10;
-static const unsigned long STRAFE_TIME_MS = 800;
 // ─────────────────────────────────────────────────────────────────────────────
 
-fsm::fsm(percepetion *perception, movement *motors)
-    : perception(perception), motors(motors),
+namespace {
+
+float wrapDegrees(float angle_deg)
+{
+    while (angle_deg > 180.0f) angle_deg -= 360.0f;
+    while (angle_deg <= -180.0f) angle_deg += 360.0f;
+    return angle_deg;
+}
+
+bool isValid(float value, float min_value, float max_value)
+{
+    return value >= min_value && value <= max_value;
+}
+
+float bestRightWallCenterEstimateMm(percepetion *perception)
+{
+    const float right_ir_mm = perception->getIRMedRight();
+    const float us_mm = perception->getUltrasonicMm();
+
+    const bool right_ok = isValid(right_ir_mm, robot_config::kMedIRMinMm, robot_config::kMedIRMaxMm);
+    const bool us_ok = isValid(us_mm, robot_config::kUsMinMm, robot_config::kUsMaxMm);
+
+    float estimates[2];
+    int count = 0;
+
+    if (right_ok && us_ok) {
+        estimates[count++] = right_ir_mm - robot_config::kRightIRMount.left_offset_mm;
+        estimates[count++] = us_mm - robot_config::kRightUSMount.left_offset_mm;
+    } else if (right_ok) {
+        estimates[count++] = right_ir_mm - robot_config::kRightIRMount.left_offset_mm;
+    } else if (us_ok) {
+        estimates[count++] = us_mm - robot_config::kRightUSMount.left_offset_mm;
+    }
+
+    if (count == 0) {
+        return 0.0f;
+    }
+
+    float sum = 0.0f;
+    for (int i = 0; i < count; ++i) {
+        sum += estimates[i];
+    }
+    return sum / (float)count;
+}
+
+}  // namespace
+
+fsm::fsm(percepetion *perception, movement *motors, pose_estimator *estimator)
+    : perception(perception), motors(motors), estimator(estimator),
       state(HOMING_IDLE),
-      heading(0.0f), lastUpdateUs(0),
+      scanAccumulatedDeg(0.0f), returnAccumulatedDeg(0.0f),
+      previousHeadingDeg(0.0f), previousHeadingValid(false),
       topCount(0), minUsDist(9999.0f), minUsHeading(0.0f),
       lastValidUs(-1.0f), usReadingCount(0), lastSampleMs(0),
-      returnStartHeading(0.0f), returnExtraStart(-1), lastSampleUsMs(0),
-      strafeStart(0),
+      returnExtraStart(-1),
+      strafeTargetX(0.0f),
       leftWallSeen(false), leftNonIgnoreCount(0),
       leftIgnoreCount(0), leftLastCountedMs(0)
 {
@@ -38,13 +87,28 @@ fsm::fsm(percepetion *perception, movement *motors)
 
 fsm::~fsm() {}
 
-// ── Heading ───────────────────────────────────────────────────────────────────
+float fsm::getHeading() const
+{
+    return estimator != nullptr ? estimator->getHeadingDeg() : 0.0f;
+}
 
-void fsm::updateHeading() {
-    unsigned long now = micros();
-    float dt = (now - lastUpdateUs) / 1e6f;
-    lastUpdateUs = now;
-    heading += perception->getGyroZ() * (180.0f / PI) * dt;
+Pose2D fsm::getPose() const
+{
+    return estimator != nullptr ? estimator->getPose() : Pose2D{0.0f, 0.0f, 0.0f};
+}
+
+float fsm::headingDeltaDeg()
+{
+    const float current_heading = getHeading();
+    if (!previousHeadingValid) {
+        previousHeadingDeg = current_heading;
+        previousHeadingValid = true;
+        return 0.0f;
+    }
+
+    const float delta = wrapDegrees(current_heading - previousHeadingDeg);
+    previousHeadingDeg = current_heading;
+    return delta;
 }
 
 // ── Top-N helpers ─────────────────────────────────────────────────────────────
@@ -79,6 +143,29 @@ float fsm::avgTopDist() {
     return sum / topCount;
 }
 
+void fsm::initializePoseFromHoming()
+{
+    if (estimator == nullptr) {
+        return;
+    }
+
+    float front_mm = perception->getIRMedFront();
+    if (!isValid(front_mm, robot_config::kMedIRMinMm, robot_config::kMedIRMaxMm)) {
+        front_mm = FORWARD_STOP_MM;
+    }
+
+    float x_mm = bestRightWallCenterEstimateMm(perception);
+    if (!isValid(x_mm, robot_config::kUsMinMm, robot_config::kArenaWidthMm)) {
+        x_mm = APPROACH_STOP_CM * 10.0f - robot_config::kRightUSMount.left_offset_mm;
+    }
+
+    const float y_mm = front_mm + robot_config::kFrontIRMount.forward_offset_mm;
+
+    estimator->resetPose({x_mm, y_mm, 0.0f}, 15.0f, 2.0f * robot_config::kDegToRad);
+    motors->resetHeading();
+    motors->setTargetHeading(0.0f);
+}
+
 // ── Left wall detection ───────────────────────────────────────────────────────
 
 bool fsm::leftWallDetected() {
@@ -95,7 +182,7 @@ bool fsm::leftWallDetected() {
             if (leftNonIgnoreCount >= LEFT_CONFIRM_N) {
                 leftWallSeen    = true;
                 leftIgnoreCount = 0;
-                Serial.println("Left wall seen — waiting for 10x ignore");
+                Serial.println("Left wall seen -- waiting for 10x ignore");
             }
         }
         return false;
@@ -124,19 +211,33 @@ void fsm::doHoming() {
     switch (state) {
 
     case HOMING_IDLE:
-        heading        = 0.0f;
+        if (estimator != nullptr) {
+            estimator->begin();
+        }
+        motors->resetHeading();
+        scanAccumulatedDeg = 0.0f;
+        returnAccumulatedDeg = 0.0f;
+        previousHeadingValid = false;
         minUsDist      = 9999.0f;
         minUsHeading   = 0.0f;
         lastValidUs    = -1.0f;
         usReadingCount = 0;
         topCount       = 0;
-        lastUpdateUs   = micros();
-        state          = HOMING_SCAN;
+        lastSampleMs   = 0;
+        returnExtraStart = -1;
+        leftWallSeen = false;
+        leftNonIgnoreCount = 0;
+        leftIgnoreCount = 0;
+        state = HOMING_SCAN;
         break;
 
     case HOMING_SCAN:
-        updateHeading();
         {
+            const float delta = headingDeltaDeg();
+            if (delta > 0.0f) {
+                scanAccumulatedDeg += delta;
+            }
+
             unsigned long now = millis();
             if (now - lastSampleMs >= 100) {
                 lastSampleMs = now;
@@ -147,18 +248,18 @@ void fsm::doHoming() {
                              (lastValidUs < 0.0f || fabsf(usDist - lastValidUs) <= US_SPIKE_THRESHOLD);
                 if (valid) {
                     lastValidUs = usDist;
-                    insertTopN(usDist, heading);
+                    insertTopN(usDist, getHeading());
                     if (usDist < minUsDist) minUsDist = usDist;
                 }
             }
         }
         motors->RotateCCW(ROTATE_SPEED);
-        if (heading >= 360.0f) {
+        if (scanAccumulatedDeg >= 360.0f) {
             motors->Stop(true);
-            lastUpdateUs      = micros();
-            returnStartHeading = heading;
-            returnExtraStart  = -1;
-            minUsHeading      = avgTopHeading();
+            previousHeadingValid = false;
+            returnAccumulatedDeg = 0.0f;
+            returnExtraStart = -1;
+            minUsHeading = avgTopHeading();
             Serial.print("Scan done. Avg dist=");
             Serial.print(avgTopDist(), 1);
             Serial.print(" heading=");
@@ -168,15 +269,20 @@ void fsm::doHoming() {
         break;
 
     case HOMING_RETURN:
-        updateHeading();
         {
-            float rotated = returnStartHeading - heading;
+            const float delta = headingDeltaDeg();
+            if (delta < 0.0f) {
+                returnAccumulatedDeg += -delta;
+            }
+
             float usDist  = perception->getUltrasonicCm();
-            if (rotated >= RETURN_MIN_DEG && usDist > 0.0f && usDist <= minUsDist + 2.0f) {
+            if (returnAccumulatedDeg >= RETURN_MIN_DEG &&
+                usDist > 0.0f &&
+                usDist <= minUsDist + 2.0f) {
                 if (returnExtraStart < 0) returnExtraStart = millis();
                 if (millis() - (unsigned long)returnExtraStart >= (unsigned long)RETURN_EXTRA_MS) {
                     motors->Stop(true);
-                    Serial.println("Facing wall — moving right");
+                    Serial.println("Facing wall -- moving right");
                     state = HOMING_APPROACH_WALL;
                 } else {
                     motors->RotateCW(ROTATE_SPEED);
@@ -192,7 +298,7 @@ void fsm::doHoming() {
             float usDist = perception->getUltrasonicCm();
             if (usDist > 0.0f && usDist < APPROACH_STOP_CM) {
                 motors->Stop(true);
-                Serial.println("At side wall — moving forward");
+                Serial.println("At side wall -- moving forward");
                 state = HOMING_APPROACH_FWD;
             } else {
                 motors->MoveRight(APPROACH_SPEED);
@@ -205,7 +311,8 @@ void fsm::doHoming() {
             float frontMm = perception->getIRMedFront();
             if (frontMm > 0.0f && frontMm < FORWARD_STOP_MM) {
                 motors->Stop(true);
-                Serial.println("At front wall — starting run");
+                initializePoseFromHoming();
+                Serial.println("At front wall -- starting run");
                 state = RUN_MOVE_DOWN;
             } else {
                 motors->MoveForward(FORWARD_SPEED);
@@ -226,7 +333,7 @@ void fsm::doRun() {
     case RUN_MOVE_DOWN:
         if (leftWallDetected()) {
             motors->Stop(true);
-            Serial.println("Left wall — final move down");
+            Serial.println("Left wall -- final move down");
             state = RUN_FINAL_MOVE_DOWN;
             break;
         }
@@ -234,7 +341,7 @@ void fsm::doRun() {
             float rearMm = perception->getIRLongRear();
             if (rearMm > 0.0f && rearMm <= REAR_STOP_MM) {
                 motors->Stop(true);
-                strafeStart = millis();
+                strafeTargetX = getPose().x_mm + robot_config::kLaneStepMm;
                 state = RUN_STRAFE_LEFT_A;
             } else {
                 motors->MoveBackward(MOVE_SPEED);
@@ -243,7 +350,7 @@ void fsm::doRun() {
         break;
 
     case RUN_STRAFE_LEFT_A:
-        if (millis() - strafeStart >= STRAFE_TIME_MS) {
+        if (getPose().x_mm >= strafeTargetX) {
             motors->Stop(true);
             state = RUN_MOVE_UP;
         } else {
@@ -254,7 +361,7 @@ void fsm::doRun() {
     case RUN_MOVE_UP:
         if (leftWallDetected()) {
             motors->Stop(true);
-            Serial.println("Left wall — final move up");
+            Serial.println("Left wall -- final move up");
             state = RUN_FINAL_MOVE_UP;
             break;
         }
@@ -262,7 +369,7 @@ void fsm::doRun() {
             float frontMm = perception->getIRMedFront();
             if (frontMm > 0.0f && frontMm <= FRONT_STOP_MM) {
                 motors->Stop(true);
-                strafeStart = millis();
+                strafeTargetX = getPose().x_mm + robot_config::kLaneStepMm;
                 state = RUN_STRAFE_LEFT_B;
             } else {
                 motors->MoveForward(MOVE_SPEED);
@@ -271,7 +378,7 @@ void fsm::doRun() {
         break;
 
     case RUN_STRAFE_LEFT_B:
-        if (millis() - strafeStart >= STRAFE_TIME_MS) {
+        if (getPose().x_mm >= strafeTargetX) {
             motors->Stop(true);
             state = RUN_MOVE_DOWN;
         } else {
