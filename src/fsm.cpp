@@ -21,6 +21,12 @@ static const float LEFT_IGNORE_MM     = 110.0f;
 static const int   LEFT_CONFIRM_N     = 20;
 static const int   LEFT_RESET_N       = 10;
 static const unsigned long STRAFE_TIME_MS = 800;
+
+static const float SQUARE_DIFF         =  0.0f;  // us_mm - ir_mm when square; calibrate this
+static const float SQUARE_KP           =  1.5f;  // proportional gain
+static const float SQUARE_MAX_SPEED    = 80.0f;  // max wz rotation speed
+static const float SQUARE_THRESHOLD_MM =  5.0f;  // error tolerance (mm)
+static const int   SQUARE_CONFIRM_N    = 15;      // consecutive reads within threshold to confirm
 // ─────────────────────────────────────────────────────────────────────────────
 
 fsm::fsm(percepetion *perception, movement *motors)
@@ -30,6 +36,7 @@ fsm::fsm(percepetion *perception, movement *motors)
       topCount(0), minUsDist(9999.0f), minUsHeading(0.0f),
       lastValidUs(-1.0f), usReadingCount(0), lastSampleMs(0),
       returnStartHeading(0.0f), returnExtraStart(-1), lastSampleUsMs(0),
+      squareConfirmCount(0), squareLastPrintMs(0),
       strafeStart(0),
       leftWallSeen(false), leftNonIgnoreCount(0),
       leftIgnoreCount(0), leftLastCountedMs(0)
@@ -112,7 +119,7 @@ bool fsm::leftWallDetected() {
 // ── Main update ───────────────────────────────────────────────────────────────
 
 void fsm::fsmUpdate() {
-    if (state <= HOMING_APPROACH_FWD)
+    if (state <= HOMING_SQUARE_UP)
         doHoming();
     else
         doRun();
@@ -205,13 +212,44 @@ void fsm::doHoming() {
             float frontMm = perception->getIRMedFront();
             if (frontMm > 0.0f && frontMm < FORWARD_STOP_MM) {
                 motors->Stop(true);
-                Serial.println("At front wall — starting run");
-                state = RUN_MOVE_DOWN;
+                squareConfirmCount = 0;
+                Serial.println("At front wall — squaring up");
+                state = HOMING_SQUARE_UP;
             } else {
                 motors->MoveForward(FORWARD_SPEED);
             }
         }
         break;
+
+    case HOMING_SQUARE_UP:
+    {
+        float us_mm = perception->getUltrasonicCm() * 10.0f;
+        float ir_mm = perception->getIRMedRight();
+        float error = (us_mm - ir_mm) - SQUARE_DIFF;
+
+        unsigned long now = millis();
+        if (now - squareLastPrintMs >= 200) {
+            squareLastPrintMs = now;
+            Serial.print("SQ us="); Serial.print(us_mm, 1);
+            Serial.print(" ir="); Serial.print(ir_mm, 1);
+            Serial.print(" err="); Serial.println(error, 1);
+        }
+
+        if (fabsf(error) < SQUARE_THRESHOLD_MM) {
+            squareConfirmCount++;
+            if (squareConfirmCount >= SQUARE_CONFIRM_N) {
+                motors->Stop(true);
+                Serial.println("Squared up — starting run");
+                state = RUN_MOVE_DOWN;
+            }
+        } else {
+            squareConfirmCount = 0;
+        }
+
+        float wz = constrain(SQUARE_KP * error, -SQUARE_MAX_SPEED, SQUARE_MAX_SPEED);
+        motors->drive(0, 0, (int)wz);
+        break;
+    }
 
     default:
         break;

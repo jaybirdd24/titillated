@@ -10,6 +10,7 @@ enum RobotState {
     HOMING_RETURN,          // rotate CW back to averaged closest heading
     HOMING_APPROACH_WALL,   // move right until US < 15 cm
     HOMING_APPROACH_FWD,    // move forward until front IR < 150 mm
+    HOMING_SQUARE_UP,       // rotate until both right sensors match calibrated diff
     // ── Run ───────────────────────────────────────────────────────────────────
     RUN_MOVE_DOWN,
     RUN_STRAFE_LEFT_A,
@@ -58,6 +59,10 @@ private:
     void insertTopN(float dist, float head);
     float avgTopHeading();
     float avgTopDist();
+
+    // ── Square-up state ───────────────────────────────────────────────────────
+    int           squareConfirmCount;
+    unsigned long squareLastPrintMs;
 
     // ── Run state ─────────────────────────────────────────────────────────────
     unsigned long strafeStart;
