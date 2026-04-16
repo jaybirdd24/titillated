@@ -61,8 +61,14 @@ private:
     float avgTopDist();
 
     // ── Square-up state ───────────────────────────────────────────────────────
-    int           squareConfirmCount;
+    long          squareInRangeStart;
     unsigned long squareLastPrintMs;
+    float         squareUsSmoothed;
+
+    // ── Wall-follow state (APPROACH_FWD) ─────────────────────────────────────
+    float         wf_integral;
+    unsigned long wf_last_us;
+    int           wfCorrection();
 
     // ── Run state ─────────────────────────────────────────────────────────────
     unsigned long strafeStart;

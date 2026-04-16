@@ -8,25 +8,31 @@ static const float US_SPIKE_THRESHOLD = 60000.0f;
 static const int   US_WARMUP_READINGS = 5;
 static const float RETURN_MIN_DEG     = 20.0f;
 static const int   RETURN_EXTRA_MS    = 100;
-static const float APPROACH_STOP_CM   = 15.0f;
+static const float APPROACH_STOP_CM   = 10.0f;//change this for better score
 static const int   APPROACH_SPEED     = 200;
-static const float FORWARD_STOP_MM    = 150.0f;
+static const float FORWARD_STOP_MM    = 100.0f;//and this one
 static const int   FORWARD_SPEED      = 200;
 
 static const int   MOVE_SPEED         = 200;
-static const float REAR_STOP_MM       = 150.0f;
-static const float FRONT_STOP_MM      = 150.0f;
+static const float REAR_STOP_MM       = 100.0f;//and this one
+static const float FRONT_STOP_MM      = 100.0f;///and this one
 static const float LEFT_STOP_MM       = 120.0f;
 static const float LEFT_IGNORE_MM     = 110.0f;
 static const int   LEFT_CONFIRM_N     = 20;
 static const int   LEFT_RESET_N       = 10;
 static const unsigned long STRAFE_TIME_MS = 800;
 
-static const float SQUARE_DIFF         =  0.0f;  // us_mm - ir_mm when square; calibrate this
-static const float SQUARE_KP           =  1.5f;  // proportional gain
-static const float SQUARE_MAX_SPEED    = 80.0f;  // max wz rotation speed
-static const float SQUARE_THRESHOLD_MM =  5.0f;  // error tolerance (mm)
-static const int   SQUARE_CONFIRM_N    = 15;      // consecutive reads within threshold to confirm
+static const float SQUARE_DIFF            =  17.0f; // us_mm - ir_mm when square; calibrate this
+static const float SQUARE_KP             =  20.0f;
+static const float SQUARE_MAX_SPEED      =  80.0f;
+static const float SQUARE_THRESHOLD_MM   =   5.0f;
+static const unsigned long SQUARE_HOLD_MS = 3000;  // must stay within threshold for this long
+static const float SQUARE_US_ALPHA       =   0.2f; // EMA smoothing for US in square-up
+
+static const float WF_SETPOINT_CM = 10.0f;//and this one
+static const float WF_KP          = 18.0f;
+static const float WF_KI          =  0.5f;
+static const float WF_MAX_INT     = 200.0f;
 // ─────────────────────────────────────────────────────────────────────────────
 
 fsm::fsm(percepetion *perception, movement *motors)
@@ -36,7 +42,9 @@ fsm::fsm(percepetion *perception, movement *motors)
       topCount(0), minUsDist(9999.0f), minUsHeading(0.0f),
       lastValidUs(-1.0f), usReadingCount(0), lastSampleMs(0),
       returnStartHeading(0.0f), returnExtraStart(-1), lastSampleUsMs(0),
-      squareConfirmCount(0), squareLastPrintMs(0),
+      squareInRangeStart(-1), squareLastPrintMs(0), squareUsSmoothed(-1.0f),
+      wf_integral(0.0f), wf_last_us(0),
+
       strafeStart(0),
       leftWallSeen(false), leftNonIgnoreCount(0),
       leftIgnoreCount(0), leftLastCountedMs(0)
@@ -114,6 +122,25 @@ bool fsm::leftWallDetected() {
         }
         return leftIgnoreCount >= LEFT_RESET_N;
     }
+}
+
+// ── Wall-follow correction (APPROACH_FWD) ────────────────────────────────────
+
+int fsm::wfCorrection() {
+    unsigned long now = micros();
+    float dt = (now - wf_last_us) / 1e6f;
+    wf_last_us = now;
+    if (dt > 0.1f) dt = 0.1f;
+
+    float dist = perception->getUltrasonicCm();
+    if (dist <= 0.0f) return 0;
+
+    float error = dist - WF_SETPOINT_CM;
+    wf_integral += error * dt;
+    wf_integral = constrain(wf_integral, -WF_MAX_INT, WF_MAX_INT);
+
+    float vy = WF_KP * error + WF_KI * wf_integral;
+    return (int)constrain(-vy, -300, 300);
 }
 
 // ── Main update ───────────────────────────────────────────────────────────────
@@ -212,18 +239,25 @@ void fsm::doHoming() {
             float frontMm = perception->getIRMedFront();
             if (frontMm > 0.0f && frontMm < FORWARD_STOP_MM) {
                 motors->Stop(true);
-                squareConfirmCount = 0;
+                squareInRangeStart = -1;
+                squareUsSmoothed   = -1.0f;
                 Serial.println("At front wall — squaring up");
                 state = HOMING_SQUARE_UP;
             } else {
-                motors->MoveForward(FORWARD_SPEED);
+                int vy = wfCorrection();
+                motors->drive(FORWARD_SPEED, vy, (int)motors->headingCorrection());
             }
         }
         break;
 
     case HOMING_SQUARE_UP:
     {
-        float us_mm = perception->getUltrasonicCm() * 10.0f;
+        float us_raw = perception->getUltrasonicCm() * 10.0f;
+        if (us_raw > 0.0f) {
+            squareUsSmoothed = (squareUsSmoothed < 0.0f) ? us_raw
+                             : SQUARE_US_ALPHA * us_raw + (1.0f - SQUARE_US_ALPHA) * squareUsSmoothed;
+        }
+        float us_mm = squareUsSmoothed;
         float ir_mm = perception->getIRMedRight();
         float error = (us_mm - ir_mm) - SQUARE_DIFF;
 
@@ -236,18 +270,24 @@ void fsm::doHoming() {
         }
 
         if (fabsf(error) < SQUARE_THRESHOLD_MM) {
-            squareConfirmCount++;
-            if (squareConfirmCount >= SQUARE_CONFIRM_N) {
+            if (squareInRangeStart < 0) squareInRangeStart = (long)now;
+            if (now - (unsigned long)squareInRangeStart >= SQUARE_HOLD_MS) {
                 motors->Stop(true);
                 Serial.println("Squared up — starting run");
                 state = RUN_MOVE_DOWN;
+                break;
             }
         } else {
-            squareConfirmCount = 0;
+            squareInRangeStart = -1;
         }
 
-        float wz = constrain(SQUARE_KP * error, -SQUARE_MAX_SPEED, SQUARE_MAX_SPEED);
-        motors->drive(0, 0, (int)wz);
+        if (fabsf(error) >= SQUARE_THRESHOLD_MM) {
+            int speed = (int)constrain(SQUARE_KP * fabsf(error), 30.0f, SQUARE_MAX_SPEED);
+            if (error > 0.0f) motors->RotateCW(speed);
+            else              motors->RotateCCW(speed);
+        } else {
+            motors->Stop(true);  // hold still while confirming
+        }
         break;
     }
 

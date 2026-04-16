@@ -74,9 +74,21 @@ static const int   APPROACH_SPEED    = 200;
 static const float FORWARD_STOP_MM   = 150.0f;  // stop forward when front IR < this (mm)
 static const int   FORWARD_SPEED     = 200;
 
+// ── Square-up constants ───────────────────────────────────────────────────────
+static const float SQUARE_DIFF         =  17.0f;  // us_mm - ir_mm when square; calibrate this
+static const float SQUARE_KP           =  20.0f;
+static const float SQUARE_MAX_SPEED    = 80.0f;
+static const float SQUARE_THRESHOLD_MM =  5.0f;
+static const unsigned long SQUARE_HOLD_MS = 3000;  // must stay within threshold for this long
+
+static long          squareInRangeStart = -1;
+static unsigned long squareLastPrintMs  = 0;
+static float         squareUsSmoothed   = -1.0f;
+static const float   SQUARE_US_ALPHA   = 0.2f;  // EMA smoothing (lower = smoother)
+
 // ── US wall-follow PI (APPROACH_FORWARD) ─────────────────────────────────────
 static const float WF_SETPOINT_CM = 15.0f;  // target distance from right wall (cm)
-static const float WF_KP          = 15.0f;   // tune: higher = more aggressive correction
+static const float WF_KP          = 18.0f;   // tune: higher = more aggressive correction
 static const float WF_KI          = 0.5f;   // tune: reduces steady-state offset
 static const float WF_MAX_INT     = 200.0f;
 
@@ -101,7 +113,7 @@ static int wfCorrection() {
 }
 // ─────────────────────────────────────────────────────────────────────────────
 
-enum State { SCAN, RETURN, APPROACH, APPROACH_FORWARD, DONE };
+enum State { SCAN, RETURN, APPROACH, APPROACH_FORWARD, SQUARE_UP, DONE };
 static State state = SCAN;
 
 void setup() {
@@ -201,10 +213,55 @@ void loop() {
                 motors.Stop(true);
                 Serial.print("At front wall. IR=");
                 Serial.println(frontMm, 1);
-                state = DONE;
+                squareInRangeStart = -1;
+                squareUsSmoothed   = -1.0f;
+                state = SQUARE_UP;
             } else {
                 int vy = wfCorrection();
+                Serial.print("WF vy="); Serial.print(vy);
+                Serial.print("  us="); Serial.println(perception.getUltrasonicCm(), 1);
                 motors.drive(FORWARD_SPEED, vy, (int)motors.headingCorrection());
+            }
+        }
+        break;
+
+    case SQUARE_UP:
+        {
+            float us_raw = perception.getUltrasonicCm() * 10.0f;
+            if (us_raw > 0.0f) {
+                squareUsSmoothed = (squareUsSmoothed < 0.0f) ? us_raw
+                                 : SQUARE_US_ALPHA * us_raw + (1.0f - SQUARE_US_ALPHA) * squareUsSmoothed;
+            }
+            float us_mm = squareUsSmoothed;
+            float ir_mm = perception.getIRMedRight();
+            float error = (us_mm - ir_mm) - SQUARE_DIFF;
+
+            unsigned long now = millis();
+            if (now - squareLastPrintMs >= 200) {
+                squareLastPrintMs = now;
+                Serial.print("SQ us="); Serial.print(us_mm, 1);
+                Serial.print(" ir="); Serial.print(ir_mm, 1);
+                Serial.print(" err="); Serial.println(error, 1);
+            }
+
+            if (fabsf(error) < SQUARE_THRESHOLD_MM) {
+                if (squareInRangeStart < 0) squareInRangeStart = (long)now;
+                if (now - (unsigned long)squareInRangeStart >= SQUARE_HOLD_MS) {
+                    motors.Stop(true);
+                    Serial.println("Squared up — done");
+                    state = DONE;
+                    break;
+                }
+            } else {
+                squareInRangeStart = -1;
+            }
+
+            if (fabsf(error) >= SQUARE_THRESHOLD_MM) {
+                int speed = (int)constrain(SQUARE_KP * fabsf(error), 30.0f, SQUARE_MAX_SPEED);
+                if (error > 0.0f) motors.RotateCW(speed);
+                else              motors.RotateCCW(speed);
+            } else {
+                motors.Stop(true);  // hold still while confirming
             }
         }
         break;
@@ -217,7 +274,7 @@ void loop() {
     static unsigned long lastPrint = 0;
     if (millis() - lastPrint >= 100) {
         lastPrint = millis();
-        const char* stateStr = state == SCAN ? "SCAN" : state == RETURN ? "RETURN" : state == APPROACH ? "APPROACH" : state == APPROACH_FORWARD ? "APPROACH_FWD" : "DONE";
+        const char* stateStr = state == SCAN ? "SCAN" : state == RETURN ? "RETURN" : state == APPROACH ? "APPROACH" : state == APPROACH_FORWARD ? "APPROACH_FWD" : state == SQUARE_UP ? "SQUARE_UP" : "DONE";
         Serial.print(stateStr);
         Serial.print("  heading=");
         Serial.print(heading, 1);
