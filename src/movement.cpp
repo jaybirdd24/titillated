@@ -150,6 +150,9 @@ float movement::wallFollowCorrection(float setpoint_mm)
     filtered_derivative_vy = 0.7f * filtered_derivative_vy + 0.3f * raw_deriv;
     prev_error_vy = error;
 
+
+    
+
     return KP_VY * error + KI_VY * integral_vy + KD_VY * filtered_derivative_vy;
 }
 

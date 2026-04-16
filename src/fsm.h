@@ -64,6 +64,8 @@ private:
     long          squareInRangeStart;
     unsigned long squareLastPrintMs;
     float         squareUsSmoothed;
+    float         squareIntegral;
+    unsigned long squareLastUs;
 
     // ── Wall-follow state (APPROACH_FWD) ─────────────────────────────────────
     float         wf_integral;
@@ -71,7 +73,12 @@ private:
     int           wfCorrection();
 
     // ── Run state ─────────────────────────────────────────────────────────────
-    unsigned long strafeStart;
+    float         wf_run_setpoint_mm;
+    float         wf_run_integral;
+    unsigned long wf_run_last_us;
+    int           runWfCorrection();
+    void          resetRunWf();
+
     bool          leftWallSeen;
     int           leftNonIgnoreCount;
     int           leftIgnoreCount;
