@@ -20,6 +20,8 @@ constexpr uint8_t PIN_BATTERY = A0;
 
 // ── Smoothing ──────────────────────────────────────────────────────
 constexpr float IR_EMA_ALPHA = 0.1f;  // EMA low-pass filter coefficient (0-1, lower = smoother)
+constexpr float US_EMA_ALPHA = 0.2f;  // EMA for ultrasonic (lower = smoother)
+constexpr float US_MAX_JUMP_CM = 5.0f; // reject readings that jump more than this from previous
 
 class percepetion
 {
@@ -36,6 +38,8 @@ private:
 
     // ── Ultrasonic ────────────────────────────────────────────────
     float usDistanceCm;
+    float usLastValidCm;    // last accepted reading (for spike rejection)
+    int   usRejectCount;    // consecutive rejected readings
 
     // ── Helpers ───────────────────────────────────────────────────
     void  readIR();

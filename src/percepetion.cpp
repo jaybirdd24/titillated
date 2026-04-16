@@ -11,7 +11,9 @@ percepetion::percepetion()
       irLongLeftFiltered(0.0f),
       irMedRightFiltered(0.0f),
       irLongRearFiltered(0.0f),
-      usDistanceCm(0.0f)
+      usDistanceCm(0.0f),
+      usLastValidCm(-1.0f),
+      usRejectCount(0)
 {}
 
 percepetion::~percepetion() {}
@@ -91,7 +93,30 @@ void percepetion::readUltrasonic()
     digitalWrite(PIN_US_TRIG, LOW);
 
     unsigned long pulse = pulseIn(PIN_US_ECHO, HIGH, US_MAX_PULSE_US);
-    usDistanceCm = (pulse > 0) ? (float)pulse / 58.0f : 0.0f;
+    float rawCm = (pulse > 0) ? (float)pulse / 58.0f : 0.0f;
+
+    // No echo — keep previous filtered value
+    if (rawCm <= 0.0f) return;
+
+    // Spike rejection: if reading jumps too far from last valid, reject it.
+    // After 3 consecutive rejects, accept anyway (the robot actually moved).
+    if (usLastValidCm > 0.0f &&
+        fabsf(rawCm - usLastValidCm) > US_MAX_JUMP_CM &&
+        usRejectCount < 3)
+    {
+        usRejectCount++;
+        return;
+    }
+
+    usRejectCount = 0;
+    usLastValidCm = rawCm;
+
+    // EMA low-pass filter
+    if (usDistanceCm <= 0.0f) {
+        usDistanceCm = rawCm;  // seed on first valid reading
+    } else {
+        usDistanceCm += US_EMA_ALPHA * (rawCm - usDistanceCm);
+    }
 }
 
 // ── IR distance conversion (power-law curve fit) ──────────────────
