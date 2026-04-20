@@ -30,6 +30,7 @@ public:
     ~fsm();
 
     void        fsmUpdate();
+    void        startSquareUp();
     RobotState  getState()   const { return state; }
     float       getHeading() const { return heading; }
 
@@ -68,6 +69,7 @@ private:
     float         squareIntegral;
     float         squarePrevError;
     unsigned long squareLastUs;
+    unsigned long squareKickStart;   // millis() when last rotation kick began (0 = no kick active)
 
     // ── Set-distance state ──────────────────────────────────────────────────
     long          setDistInRangeStart;

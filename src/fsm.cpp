@@ -32,13 +32,15 @@ static const unsigned long STRAFE_TIME_MS = 710;//tune the strafe time between c
 static const float STRAFE_DECEL_KP       =   3.0f; // ramp down strafe speed near target
 static const float STRAFE_MIN_SPEED      =  60.0f;  // don't go slower than this during strafe
 
-static const float SQUARE_DIFF            =  21.5f; // us_mm - ir_mm when square; calibrate this
+static const float SQUARE_DIFF            =  9.0f; // us_mm - ir_mm when square; calibrate this
 static const float SQUARE_KP             =  70.0f;
 static const float SQUARE_KI             =   0.05f;
 static const float SQUARE_KD             =   4.0f;
 static const float SQUARE_MAX_INT        = 200.0f;  // integral anti-windup clamp
-static const float SQUARE_MAX_SPEED      =  80.0f;
-static const float SQUARE_MIN_SPEED      =  50.0f;
+static const float SQUARE_MAX_SPEED      = 120.0f;
+static const float SQUARE_MIN_SPEED      = 100.0f;
+static const int   SQUARE_KICK_SPEED     = 200;    // briefly applied to break static friction
+static const unsigned long SQUARE_KICK_MS = 80;    // how long the kick lasts
 static const float SQUARE_THRESHOLD_MM   =   4.0f;
 static const unsigned long SQUARE_HOLD_MS = 2000;  // must stay within threshold for this long
 static const float SQUARE_US_ALPHA       =   0.2f; // EMA smoothing for US in square-up
@@ -74,7 +76,7 @@ fsm::fsm(percepetion *perception, movement *motors)
       lastValidUs(-1.0f), usReadingCount(0), lastSampleMs(0),
       returnStartHeading(0.0f), returnExtraStart(-1), lastSampleUsMs(0),
       squareInRangeStart(-1), squareLastPrintMs(0), squareUsSmoothed(-1.0f),
-      squareIntegral(0.0f), squarePrevError(0.0f), squareLastUs(0),
+      squareIntegral(0.0f), squarePrevError(0.0f), squareLastUs(0), squareKickStart(0),
       setDistInRangeStart(-1),
       wf_integral(0.0f), wf_last_us(0),
       strafeStartMs(0), runHeading(0.0f), runWfSetpoint(0.0f),
@@ -86,6 +88,16 @@ fsm::fsm(percepetion *perception, movement *motors)
 }
 
 fsm::~fsm() {}
+
+void fsm::startSquareUp() {
+    squareIntegral     = 0.0f;
+    squarePrevError    = 0.0f;
+    squareUsSmoothed   = -1.0f;
+    squareInRangeStart = -1;
+    squareKickStart    = millis();   // kick immediately on entry
+    squareLastUs       = micros();
+    state              = HOMING_SQUARE_UP;
+}
 
 // ── Heading ───────────────────────────────────────────────────────────────────
 
@@ -400,11 +412,15 @@ void fsm::doHoming() {
 
         // ── actuate with clamped speed ───────────────────────────────────
         if (fabsf(error) >= SQUARE_THRESHOLD_MM) {
-            int speed = (int)constrain(fabsf(output), SQUARE_MIN_SPEED, SQUARE_MAX_SPEED);
+            // kickstart: fire a brief high-speed pulse to break static friction
+            bool kicking = (millis() - squareKickStart) < SQUARE_KICK_MS;
+            int speed = kicking ? SQUARE_KICK_SPEED
+                                : (int)constrain(fabsf(output), SQUARE_MIN_SPEED, SQUARE_MAX_SPEED);
             if (output > 0.0f) motors->RotateCW(speed);
             else               motors->RotateCCW(speed);
         } else {
             motors->Stop(true);  // hold still while confirming
+            squareKickStart = millis();  // arm kick for next correction burst
         }
         break;
     }
