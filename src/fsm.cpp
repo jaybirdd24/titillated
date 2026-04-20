@@ -28,33 +28,18 @@ static const float FRONT_STOP_MM      = 100.0f;///and this one
 static const float LEFT_IGNORE_MM     = 110.0f;
 static const int   LEFT_CONFIRM_N     = 20;
 static const int   LEFT_RESET_N       = 10;
-static const unsigned long STRAFE_TIME_MS = 710;//tune the strafe time between cuts
+static const unsigned long STRAFE_TIME_MS = 693;//tune the strafe time between cuts
 static const float STRAFE_DECEL_KP       =   3.0f; // ramp down strafe speed near target
 static const float STRAFE_MIN_SPEED      =  60.0f;  // don't go slower than this during strafe
 
-static const float SQUARE_DIFF            =  21.5f; // us_mm - ir_mm when square; calibrate this
-static const float SQUARE_KP             =  70.0f;
-static const float SQUARE_KI             =   0.05f;
-static const float SQUARE_KD             =   4.0f;
-static const float SQUARE_MAX_INT        = 200.0f;  // integral anti-windup clamp
-static const float SQUARE_MAX_SPEED      =  80.0f;
-static const float SQUARE_MIN_SPEED      =  50.0f;
-static const float SQUARE_THRESHOLD_MM   =   4.0f;
-static const unsigned long SQUARE_HOLD_MS = 2000;  // must stay within threshold for this long
-static const float SQUARE_US_ALPHA       =   0.2f; // EMA smoothing for US in square-up
-static const float SQUARE_STRAFE_THRESH  =  30.0f; // if |us-ir - SQUARE_DIFF| > this, strafe before rotating
-static const float SQUARE_STRAFE_KP      =   2.0f;
-static const float SQUARE_STRAFE_MAX     = 120.0f;
-static const float SQUARE_STRAFE_MIN     =  40.0f;
-
-
-
-static const float SET_DIST_TARGET_CM  = 11.0f; // wall distance where SQUARE_DIFF was calibrated; tune this
-static const float SET_DIST_TOLERANCE_CM = 0.6f; // close enough to start square-up
-static const float SET_DIST_KP         = 40.0f;  // P-gain for strafe correction
-static const float SET_DIST_MAX_SPEED  = 120.0f;
-static const float SET_DIST_MIN_SPEED  =  40.0f;
-static const unsigned long SET_DIST_HOLD_MS = 200; // must hold in range this long
+static const int   RAM_SPEED              = 200;     // speed to drive into wall
+static const unsigned long RAM_TIME_MS    = 1000;    // how long to press against wall
+static const float BACK_OFF_TARGET_MM     = 86.0f;   // IR med right target after backing off
+static const float BACK_OFF_TOLERANCE_MM  = 7.0f;    // close enough
+static const float BACK_OFF_KP            = 11.5f;
+static const float BACK_OFF_MAX_SPEED     = 120.0f;
+static const float BACK_OFF_MIN_SPEED     = 40.0f;
+static const unsigned long BACK_OFF_HOLD_MS = 250;   // hold in range before starting run
 
 static const float WF_SETPOINT_CM = 9.5f;//and this one
 
@@ -75,7 +60,7 @@ fsm::fsm(percepetion *perception, movement *motors)
       returnStartHeading(0.0f), returnExtraStart(-1), lastSampleUsMs(0),
       squareInRangeStart(-1), squareLastPrintMs(0), squareUsSmoothed(-1.0f),
       squareIntegral(0.0f), squarePrevError(0.0f), squareLastUs(0),
-      setDistInRangeStart(-1),
+      ramStartMs(0), backOffInRangeStart(-1),
       wf_integral(0.0f), wf_last_us(0),
       strafeStartMs(0), runHeading(0.0f), runWfSetpoint(0.0f),
       leftWallSeen(false), leftNonIgnoreCount(0),
@@ -180,7 +165,7 @@ int fsm::wfCorrection() {
 // ── Main update ───────────────────────────────────────────────────────────────
 
 void fsm::fsmUpdate() {
-    if (state <= HOMING_SQUARE_UP)
+    if (state <= HOMING_BACK_OFF)
         doHoming();
     else
         doRun();
@@ -273,9 +258,9 @@ void fsm::doHoming() {
             float frontMm = perception->getIRMedFront();
             if (frontMm > 0.0f && frontMm < FORWARD_STOP_MM) {
                 motors->Stop(true);
-                setDistInRangeStart = -1;
-                Serial.println("At front wall — adjusting wall distance");
-                state = HOMING_SET_DISTANCE;
+                ramStartMs = millis();
+                Serial.println("At front wall — ramming right wall to square up");
+                state = HOMING_RAM_WALL;
             } else {
                 int vy = wfCorrection();
                 motors->drive(FORWARD_SPEED, vy, (int)motors->headingCorrection());
@@ -283,131 +268,48 @@ void fsm::doHoming() {
         }
         break;
 
-    case HOMING_SET_DISTANCE:
-        {
-            float usDist = perception->getUltrasonicCm();
-            if (usDist <= 0.0f) break;  // no reading yet
+    case HOMING_RAM_WALL:
+        if (millis() - ramStartMs >= RAM_TIME_MS) {
+            motors->Stop(true);
+            backOffInRangeStart = -1;
+            Serial.println("Ram done — backing off to 86 mm");
+            state = HOMING_BACK_OFF;
+        } else {
+            motors->MoveRight(RAM_SPEED);
+        }
+        break;
 
-            float error = usDist - SET_DIST_TARGET_CM;
+    case HOMING_BACK_OFF:
+        {
+            float ir_mm = perception->getIRMedRight();
+            if (ir_mm <= 0.0f) break;
+
+            float error = -ir_mm + BACK_OFF_TARGET_MM;
             unsigned long now = millis();
 
-            if (fabsf(error) < SET_DIST_TOLERANCE_CM) {
-                // in range — hold and wait
+            if (fabsf(error) < BACK_OFF_TOLERANCE_MM) {
                 motors->Stop(true);
-                if (setDistInRangeStart < 0) setDistInRangeStart = (long)now;
-                if (now - (unsigned long)setDistInRangeStart >= SET_DIST_HOLD_MS) {
-                    squareInRangeStart = -1;
-                    squareUsSmoothed   = -1.0f;
-                    squareIntegral     = 0.0f;
-                    squarePrevError    = 0.0f;
-                    squareLastUs       = micros();
-                    Serial.print("Wall distance set to ");
-                    Serial.print(usDist, 1);
-                    Serial.println(" cm — squaring up");
-                    state = HOMING_SQUARE_UP;
+                if (backOffInRangeStart < 0) backOffInRangeStart = (long)now;
+                if (now - (unsigned long)backOffInRangeStart >= BACK_OFF_HOLD_MS) {
+                    runHeading = motors->getHeading();
+                    runWfSetpoint = ir_mm;
+                    motors->resetWallFollow();
+                    Serial.print("Squared up — backed off to ");
+                    Serial.print(ir_mm, 1);
+                    Serial.println(" mm — starting run");
+                    state = RUN_MOVE_DOWN;
                 }
             } else {
-                setDistInRangeStart = -1;
-                int speed = (int)constrain(fabsf(SET_DIST_KP * error),
-                                           SET_DIST_MIN_SPEED, SET_DIST_MAX_SPEED);
-                // positive error = too far → strafe right (closer)
-                // negative error = too close → strafe left (farther)
+                backOffInRangeStart = -1;
+                int speed = (int)constrain(fabsf(BACK_OFF_KP * error),
+                                           BACK_OFF_MIN_SPEED, BACK_OFF_MAX_SPEED);
                 if (error > 0.0f)
-                    motors->MoveRight(speed);
+                    motors->MoveLeft(speed);   // too far from wall → move left (away)
                 else
-                    motors->MoveLeft(speed);
+                    motors->MoveRight(speed);  // too close → move right (closer)
             }
         }
         break;
-
-    case HOMING_SQUARE_UP:
-    {
-        // ── dt calculation ───────────────────────────────────────────────
-        unsigned long nowUs = micros();
-        float dt = constrain((nowUs - squareLastUs) / 1e6f, 0.0f, 0.1f);
-        squareLastUs = nowUs;
-
-        // ── sensor smoothing ─────────────────────────────────────────────
-        float us_raw = perception->getUltrasonicCm() * 10.0f;
-        if (us_raw > 0.0f) {
-            squareUsSmoothed = (squareUsSmoothed < 0.0f) ? us_raw
-                             : SQUARE_US_ALPHA * us_raw + (1.0f - SQUARE_US_ALPHA) * squareUsSmoothed;
-        }
-        float us_mm = squareUsSmoothed;
-        float ir_mm = perception->getIRMedRight();
-        float diff  = us_mm - ir_mm;
-        float error = diff - SQUARE_DIFF;
-
-        // ── strafe to correct distance before rotating ──────────────────
-        if (fabsf(error) > SQUARE_STRAFE_THRESH) {
-            int speed = (int)constrain(fabsf(SQUARE_STRAFE_KP * error),
-                                       SQUARE_STRAFE_MIN, SQUARE_STRAFE_MAX);
-            if (error > 0.0f)
-                motors->MoveRight(speed);  // us-ir too large → move closer to wall
-            else
-                motors->MoveLeft(speed);   // us-ir too small → move away from wall
-            squareInRangeStart = -1;
-            squareIntegral     = 0.0f;
-            squarePrevError    = 0.0f;
-            break;
-        }
-
-        // ── integral with anti-windup clamping ───────────────────────────
-        squareIntegral = constrain(squareIntegral + error * dt,
-                                   -SQUARE_MAX_INT, SQUARE_MAX_INT);
-
-        // reset integral on zero-crossing to prevent overshoot
-        if ((error > 0.0f && squareIntegral < 0.0f) ||
-            (error < 0.0f && squareIntegral > 0.0f)) {
-            squareIntegral = 0.0f;
-        }
-
-        // ── PID output ───────────────────────────────────────────────────
-        float derivative = (dt > 0.0f) ? (error - squarePrevError) / dt : 0.0f;
-        squarePrevError = error;
-        float output = SQUARE_KP * error + SQUARE_KI * squareIntegral + SQUARE_KD * derivative;
-
-        // ── debug print ──────────────────────────────────────────────────
-        unsigned long now = millis();
-        if (now - squareLastPrintMs >= 200) {
-            squareLastPrintMs = now;
-            Serial.print("SQ us="); Serial.print(us_mm, 1);
-            Serial.print(" ir="); Serial.print(ir_mm, 1);
-            Serial.print(" err="); Serial.print(error, 1);
-            Serial.print(" int="); Serial.print(squareIntegral, 1);
-            Serial.print(" der="); Serial.print(derivative, 1);
-            Serial.print(" out="); Serial.println(output, 1);
-        }
-
-        // ── hold timer — settled when within threshold ───────────────────
-        if (fabsf(error) < SQUARE_THRESHOLD_MM) {
-            if (squareInRangeStart < 0) squareInRangeStart = (long)now;
-            if (now - (unsigned long)squareInRangeStart >= SQUARE_HOLD_MS) {
-                motors->Stop(true);
-                squareIntegral = 0.0f;
-                runHeading = motors->getHeading();
-                runWfSetpoint = perception->getIRMedRight();
-                motors->resetWallFollow();
-                Serial.print("Squared up — WF setpoint ");
-                Serial.print(runWfSetpoint, 1);
-                Serial.println(" mm — starting run");
-                state = RUN_MOVE_DOWN;
-                break;
-            }
-        } else {
-            squareInRangeStart = -1;
-        }
-
-        // ── actuate with clamped speed ───────────────────────────────────
-        if (fabsf(error) >= SQUARE_THRESHOLD_MM) {
-            int speed = (int)constrain(fabsf(output), SQUARE_MIN_SPEED, SQUARE_MAX_SPEED);
-            if (output > 0.0f) motors->RotateCW(speed);
-            else               motors->RotateCCW(speed);
-        } else {
-            motors->Stop(true);  // hold still while confirming
-        }
-        break;
-    }
 
     default:
         break;
@@ -431,7 +333,7 @@ void fsm::doRun() {
                 state = RUN_STRAFE_LEFT_A;
             } else {
                 if (firstRun) {
-                    int vy = (int)motors->wallFollowCorrection(86.0f);
+                    int vy = (int)motors->wallFollowCorrection(90.0f);
                     motors->drive(-MOVE_SPEED, vy, (int)motors->headingCorrection());
                 } else {
                     motors->drive(-MOVE_SPEED, 0, (int)motors->headingCorrection());

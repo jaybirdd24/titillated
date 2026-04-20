@@ -14,7 +14,8 @@ static const char* stateName(RobotState s) {
         case HOMING_RETURN:        return "HOMING_RETURN";
         case HOMING_APPROACH_WALL: return "HOMING_APPROACH_WALL";
         case HOMING_APPROACH_FWD:  return "HOMING_APPROACH_FWD";
-        case HOMING_SQUARE_UP:     return "HOMING_SQUARE_UP";
+        case HOMING_RAM_WALL:      return "HOMING_RAM_WALL";
+        case HOMING_BACK_OFF:      return "HOMING_BACK_OFF";
         case RUN_MOVE_DOWN:        return "RUN_MOVE_DOWN";
         case RUN_STRAFE_LEFT_A:    return "RUN_STRAFE_A";
         case RUN_MOVE_UP:          return "RUN_MOVE_UP";

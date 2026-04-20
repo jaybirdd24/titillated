@@ -10,8 +10,8 @@ enum RobotState {
     HOMING_RETURN,          // rotate CW back to averaged closest heading
     HOMING_APPROACH_WALL,   // move right until US < 15 cm
     HOMING_APPROACH_FWD,    // move forward until front IR < 150 mm
-    HOMING_SET_DISTANCE,    // strafe to precise wall distance where SQUARE_DIFF is valid
-    HOMING_SQUARE_UP,       // rotate until both right sensors match calibrated diff
+    HOMING_RAM_WALL,        // drive into right wall to physically square up
+    HOMING_BACK_OFF,        // strafe left until IR med right reads 86 mm
     // ── Run ───────────────────────────────────────────────────────────────────
     RUN_MOVE_DOWN,
     RUN_STRAFE_LEFT_A,
@@ -69,8 +69,9 @@ private:
     float         squarePrevError;
     unsigned long squareLastUs;
 
-    // ── Set-distance state ──────────────────────────────────────────────────
-    long          setDistInRangeStart;
+    // ── Ram / back-off state ────────────────────────────────────────────────
+    unsigned long ramStartMs;
+    long          backOffInRangeStart;
 
     // ── Wall-follow state (APPROACH_FWD) ─────────────────────────────────────
     float         wf_integral;
