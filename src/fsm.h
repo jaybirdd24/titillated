@@ -10,6 +10,7 @@ enum RobotState {
     HOMING_RETURN,          // rotate CW back to averaged closest heading
     HOMING_APPROACH_WALL,   // move right until US < 15 cm
     HOMING_APPROACH_FWD,    // move forward until front IR < 150 mm
+    HOMING_SET_DISTANCE,    // strafe to precise wall distance where SQUARE_DIFF is valid
     HOMING_SQUARE_UP,       // rotate until both right sensors match calibrated diff
     // ── Run ───────────────────────────────────────────────────────────────────
     RUN_MOVE_DOWN,
@@ -65,7 +66,11 @@ private:
     unsigned long squareLastPrintMs;
     float         squareUsSmoothed;
     float         squareIntegral;
+    float         squarePrevError;
     unsigned long squareLastUs;
+
+    // ── Set-distance state ──────────────────────────────────────────────────
+    long          setDistInRangeStart;
 
     // ── Wall-follow state (APPROACH_FWD) ─────────────────────────────────────
     float         wf_integral;
@@ -73,16 +78,16 @@ private:
     int           wfCorrection();
 
     // ── Run state ─────────────────────────────────────────────────────────────
-    float         wf_run_setpoint_mm;
-    float         wf_run_integral;
-    unsigned long wf_run_last_us;
-    int           runWfCorrection();
-    void          resetRunWf();
+    unsigned long strafeStartMs;
+    float         runHeading;   // saved heading at run start — kept for all passes
+    float         runWfSetpoint; // IR distance (mm) captured after square-up for wall follow
 
     bool          leftWallSeen;
     int           leftNonIgnoreCount;
     int           leftIgnoreCount;
     unsigned long leftLastCountedMs;
+    bool          firstRun;
+    int           runCount;
 
     bool leftWallDetected();
 

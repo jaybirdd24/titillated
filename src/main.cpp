@@ -49,10 +49,13 @@ void loop() {
     static unsigned long lastPrint = 0;
     if (millis() - lastPrint >= 100) {
         lastPrint = millis();
-        Serial.print(stateName(stateMachine.getState()));
-        Serial.print(",");
-        Serial.print(stateMachine.getHeading(), 1);
-        Serial.print(",");
-        Serial.println(perception.getUltrasonicCm(), 1);
+        // Serial.print(stateName(stateMachine.getState()));
+        // Serial.print(",");
+        // Serial.print(stateMachine.getHeading(), 1);
+        // Serial.print(",");
+        // Serial.println(perception.getUltrasonicCm(), 1);
+        float length = perception.getIRLongLeft();
+        Serial.print("IR long left (mm): ");
+        Serial.println(length, 1);
     }
 }

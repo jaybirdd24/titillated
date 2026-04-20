@@ -53,7 +53,10 @@ private:
     float irMedRightRawToMm(int raw)   const;   // 2D120X / 2Y0A41SK (A12)
     float irLongRearRawToMm(int raw)   const;   // 2Y0A21 (A9)
 
-    float gyro_bias; // for simple gyro zeroing
+    float  gyro_bias;           // current bias estimate
+    double gyro_bias_sum;       // running sum of raw gyro Z samples
+    unsigned long gyro_bias_count; // number of samples accumulated
+    bool   gyro_bias_frozen;    // true once calibration is finalized
 
 public:
     percepetion();
@@ -89,7 +92,8 @@ public:
     float getBatteryVoltage();        // estimated voltage (V)
     bool  isBatteryLow();             // true when below safe threshold
 
-    void calibrateGyro();              // call when robot is stationary to set gyro zero
+    void feedGyroBias();               // call each loop tick during first run to accumulate bias samples
+    void freezeGyroBias();             // call once first run ends to lock in the bias
 
     // Returns true if any sensor reads below threshold_mm
     bool isObstacleTooClose(float threshold_mm);

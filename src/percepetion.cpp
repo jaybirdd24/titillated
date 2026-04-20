@@ -13,7 +13,11 @@ percepetion::percepetion()
       irLongRearFiltered(0.0f),
       usDistanceCm(0.0f),
       usLastValidCm(-1.0f),
-      usRejectCount(0)
+      usRejectCount(0),
+      gyro_bias(0.0f),
+      gyro_bias_sum(0.0),
+      gyro_bias_count(0),
+      gyro_bias_frozen(false)
 {}
 
 percepetion::~percepetion() {}
@@ -139,9 +143,10 @@ float percepetion::irLongLeftRawToMm(int raw) const
 {
     // Sharp 2Y0A21 on A8 (left-facing, 100-800 mm range)
     // breaks at 60cm. will need lpf or averaging ID: 39
-    if (raw < 20) return 800.0f;
+    // if (raw < 20) return 800.0f;
     float mm = 79426.0f * pow((float)raw, -1.078f);
-    return constrain(mm, 100.0f, 800.0f);
+    // return constrain(mm, 100.0f, 800.0f);
+    return mm;
 }
 
 float percepetion::irMedRightRawToMm(int raw) const
@@ -169,7 +174,7 @@ float percepetion::irLongRearRawToMm(int raw) const
 float percepetion::getGyroZ()
 {
     if (sensorValue.sensorId == SH2_GYROSCOPE_UNCALIBRATED) {
-        return sensorValue.un.gyroscope.z;
+        return sensorValue.un.gyroscope.z - gyro_bias;
     }
     return 0.0f;
 }
@@ -260,15 +265,20 @@ bool percepetion::isObstacleTooClose(float threshold_mm)
            getIRLongRear()  < threshold_mm;
 }
 
-void percepetion::calibrateGyro() {
-    long sum = 0;
-    uint16_t samples = 500;
-    for (uint16_t i = 0; i < samples; ++i) {
-        bno08x.getSensorEvent(&sensorValue);
-        if (sensorValue.sensorId == SH2_GYROSCOPE_UNCALIBRATED) {
-            sum += sensorValue.un.gyroscope.z;
-        }
-        delay(5);  // sample at ~200 Hz
+void percepetion::feedGyroBias() {
+    if (gyro_bias_frozen) return;
+    if (sensorValue.sensorId == SH2_GYROSCOPE_UNCALIBRATED) {
+        gyro_bias_sum += sensorValue.un.gyroscope.z;
+        gyro_bias_count++;
+        gyro_bias = (float)(gyro_bias_sum / gyro_bias_count);
     }
-    gyro_bias = (float)sum / samples;
+}
+
+void percepetion::freezeGyroBias() {
+    gyro_bias_frozen = true;
+    Serial.print("Gyro bias frozen: ");
+    Serial.print(gyro_bias, 6);
+    Serial.print(" (");
+    Serial.print(gyro_bias_count);
+    Serial.println(" samples)");
 }
