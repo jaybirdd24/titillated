@@ -4,15 +4,15 @@
 
 // ── Tuning ────────────────────────────────────────────────────────────────────
 // ── Scan / return tuning ─────────────────────────────────────────────────────
-static const int   SCAN_SPIN_SPEED        = 120;
+static const int   SCAN_SPIN_SPEED        = 150;
 static const int   SCAN_SAMPLE_INTERVAL   = 50;       // ms between samples (20 Hz)
 static const float US_MIN_CM              = 2.0f;
 static const float US_MAX_CM              = 130.0f;
 static const float TROUGH_BAND_CM         = 1.5f;     // distance above min that counts as trough
 static const int   MIN_TROUGH_SAMPLES     = 3;
 
-static const int   RETURN_SPIN_FAST       = 75;
-static const int   RETURN_SPIN_SLOW       = 60;
+static const int   RETURN_SPIN_FAST       = 110;
+static const int   RETURN_SPIN_SLOW       = 90;
 static const float RETURN_SLOW_BAND_DEG   = 10.0f;
 static const float RETURN_STOP_TOL_DEG    = 2.0f;
 static const unsigned long RETURN_STABLE_MS = 250;
@@ -30,21 +30,21 @@ static const int   FORWARD_SPEED      = 250;
 static const float LEFT_STOP_MM       = 150.0f;
 
 
-static const int   MOVE_SPEED         = 300;
+static const int   MOVE_SPEED         = 400;
 static const float REAR_STOP_MM       = 100.0f;//and this one
 static const float FRONT_STOP_MM      = 100.0f;///and this one
 static const float LEFT_IGNORE_MM     = 110.0f;
 static const int   LEFT_CONFIRM_N     = 20;
 static const int   LEFT_RESET_N       = 10;
-static const unsigned long STRAFE_TIME_MS = 597;//tune the strafe time between cuts
+static const unsigned long STRAFE_TIME_MS = 594;//tune the strafe time between cuts
 static const float STRAFE_DECEL_KP       =   3.0f; // ramp down strafe speed near target
 static const float STRAFE_MIN_SPEED      =  60.0f;  // don't go slower than this during strafe
 
 static const int   RAM_SPEED              = 200;     // speed to drive into wall
 static const unsigned long RAM_TIME_MS    = 1500;    // how long to press against wall
 static const float BACK_OFF_TARGET_MM     = 86.0f;   // IR med right target after backing off
-static const float BACK_OFF_TOLERANCE_MM  = 7.0f;    // close enough
-static const float BACK_OFF_KP            = 8.5f;
+static const float BACK_OFF_TOLERANCE_MM  = 9.0f;    // close enough
+static const float BACK_OFF_KP            = 9.5f;
 static const float BACK_OFF_MAX_SPEED     = 120.0f;
 static const float BACK_OFF_MIN_SPEED     = 40.0f;
 static const unsigned long BACK_OFF_HOLD_MS = 250;   // hold in range before starting run
@@ -402,6 +402,9 @@ void fsm::doRun() {
                 if (firstRun) {
                     int vy = (int)motors->wallFollowCorrection(87.0f);
                     motors->drive(-MOVE_SPEED, vy, (int)motors->headingCorrection());
+                } else if (runCount >= 9) {
+                    int vy = (int)motors->wallFollowCorrection(187.0f, true);
+                    motors->drive(-MOVE_SPEED, vy, (int)motors->headingCorrection());
                 } else {
                     motors->drive(-MOVE_SPEED, 0, (int)motors->headingCorrection());
                 }
@@ -443,7 +446,12 @@ void fsm::doRun() {
                 Serial.println("Front wall — strafing left");
                 state = RUN_STRAFE_LEFT_B;
             } else {
-                motors->drive(MOVE_SPEED, 0, (int)motors->headingCorrection());
+                if (runCount >= 9) {
+                    int vy = (int)motors->wallFollowCorrection(187.0f, true);
+                    motors->drive(MOVE_SPEED, vy, (int)motors->headingCorrection());
+                } else {
+                    motors->drive(MOVE_SPEED, 0, (int)motors->headingCorrection());
+                }
             }
         }
         break;
