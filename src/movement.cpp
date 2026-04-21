@@ -65,11 +65,15 @@ void movement::setMotorSpeeds(int lf, int lr, int rr, int rf)
     // Cap dt to avoid huge jumps after pauses
     if (dt > 0.1f) dt = 0.1f;
 
-    float max_delta = MAX_SLEW_RATE * dt;
+    float accel_delta = MAX_ACCEL_RATE * dt;
+    float decel_delta = MAX_DECEL_RATE * dt;
 
     float target[4] = {(float)lf, (float)lr, (float)rr, (float)rf};
     for (int i = 0; i < 4; i++) {
         float diff = target[i] - current_speeds[i];
+        // Accelerating = moving away from zero, decelerating = moving toward zero
+        bool accelerating = (fabsf(target[i]) > fabsf(current_speeds[i]));
+        float max_delta = accelerating ? accel_delta : decel_delta;
         if (diff >  max_delta) diff =  max_delta;
         if (diff < -max_delta) diff = -max_delta;
         current_speeds[i] += diff;

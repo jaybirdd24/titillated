@@ -11,6 +11,7 @@ static const char* stateName(RobotState s) {
     switch (s) {
         case HOMING_IDLE:          return "HOMING_IDLE";
         case HOMING_SCAN:          return "HOMING_SCAN";
+        case HOMING_ANALYSE:       return "HOMING_ANALYSE";
         case HOMING_RETURN:        return "HOMING_RETURN";
         case HOMING_APPROACH_WALL: return "HOMING_APPROACH_WALL";
         case HOMING_APPROACH_FWD:  return "HOMING_APPROACH_FWD";

@@ -6,11 +6,12 @@
 enum RobotState {
     // ── Homing ────────────────────────────────────────────────────────────────
     HOMING_IDLE = 0,
-    HOMING_SCAN,            // spin 360°, record top-N closest US readings
-    HOMING_RETURN,          // rotate CW back to averaged closest heading
+    HOMING_SCAN,            // spin 360°, store heading + filtered US samples
+    HOMING_ANALYSE,         // find trough centre heading from scan data
+    HOMING_RETURN,          // rotate back to trough centre heading
     HOMING_APPROACH_WALL,   // move right until US < 15 cm
     HOMING_APPROACH_FWD,    // move forward until front IR < 150 mm
-    HOMING_RAM_WALL,        // drive into right wall to physically square up
+    HOMING_RAM_WALL,        // drive diagonally into corner to square up
     HOMING_BACK_OFF,        // strafe left until IR med right reads 86 mm
     // ── Run ───────────────────────────────────────────────────────────────────
     RUN_MOVE_DOWN,
@@ -43,23 +44,35 @@ private:
     unsigned long lastUpdateUs;
     void          updateHeading();
 
-    // ── Homing state ─────────────────────────────────────────────────────────
-    static const int TOP_N = 10;
-    float  topDist[TOP_N];
-    float  topHead[TOP_N];
-    int    topCount;
-    float  minUsDist;
-    float  minUsHeading;
-    float  lastValidUs;
-    int    usReadingCount;
-    unsigned long lastSampleMs;
-    float  returnStartHeading;
-    long   returnExtraStart;
-    unsigned long lastSampleUsMs;
+    // ── Scan state ────────────────────────────────────────────────────────────
+    static const int MAX_SCAN_SAMPLES = 180;
+    static const int US_FILTER_SIZE   = 5;
 
-    void insertTopN(float dist, float head);
-    float avgTopHeading();
-    float avgTopDist();
+    float  scanHeadings[MAX_SCAN_SAMPLES];   // raw heading at each sample
+    float  scanDistances[MAX_SCAN_SAMPLES];  // filtered US at each sample
+    int    scanCount;
+    float  scanStartHeading;
+
+    // US moving-average filter
+    float  usFilterBuf[US_FILTER_SIZE];
+    int    usFilterCount;
+    int    usFilterHead;
+    float  usMovingAverage(float us);
+    void   resetUsFilter();
+
+    // Scan analysis results
+    float  scanTargetHeading;    // raw heading to return to
+    float  chosenMinDistCm;      // distance at global minimum
+    int    globalMinIdx;
+
+    bool findGlobalMinIndex(int &minIdx);
+    bool findTrough(int minIdx, int &leftIdx, int &rightIdx);
+
+    // Return state
+    unsigned long returnInTolStart;
+    bool          returnInTolActive;
+
+    unsigned long lastSampleMs;
 
     // ── Square-up state ───────────────────────────────────────────────────────
     long          squareInRangeStart;

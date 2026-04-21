@@ -41,7 +41,8 @@ class movement
         // Slew-rate limiting
         float current_speeds[4];       // actual speeds being sent (LF, LR, RR, RF)
         unsigned long last_slew_us;
-        static constexpr float MAX_SLEW_RATE = 600.0f;  // max speed units per second — smooth accel/decel
+        static constexpr float MAX_ACCEL_RATE = 1500.0f; // speed units/sec — fast ramp-up past static friction
+        static constexpr float MAX_DECEL_RATE = 600.0f;  // speed units/sec — slow ramp-down to reduce drift
 
         // Sets raw PWM microseconds on all 4 motors (1500 = stop)
         // Applies slew-rate limiting to smooth speed transitions
