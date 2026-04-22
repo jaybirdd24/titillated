@@ -13,7 +13,7 @@ constexpr uint8_t PIN_IR_LONG_REAR   = A9;   // 2Y0A21, 100-800 mm — rear long
 // Ultrasonic HC-SR04
 constexpr uint8_t PIN_US_TRIG = 48;
 constexpr uint8_t PIN_US_ECHO = 49;
-constexpr unsigned long US_MAX_PULSE_US = 23200;  // ~400 cm timeout
+constexpr unsigned long US_MAX_PULSE_US = 14000;  // ~400 cm timeout
 
 // Battery voltage divider
 constexpr uint8_t PIN_BATTERY = A0;
@@ -43,7 +43,7 @@ private:
 
     // ── Helpers ───────────────────────────────────────────────────
     void  readIR();
-    void  readUltrasonic();
+    void  readUltrasonic(bool isScanning);
 
     // Convert raw ADC (0-1023) to distance in mm.
     // NOTE: these are starting-point approximations — calibrate with
@@ -66,7 +66,7 @@ public:
     bool init();
 
     // Call every loop() iteration — polls all sensors
-    void update();
+    void update(bool isScanning = false);
 
     // ── IMU getters ───────────────────────────────────────────────
     // Angular velocity around Z axis (rad/s), positive = CCW

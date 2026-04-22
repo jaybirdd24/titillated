@@ -60,7 +60,7 @@ bool percepetion::init()
 //  Main update — call once per loop()
 // ═══════════════════════════════════════════════════════════════════
 
-void percepetion::update()
+void percepetion::update(bool isScanning)
 {
     // IMU
     if (bno08x.wasReset()) {
@@ -72,12 +72,12 @@ void percepetion::update()
     readIR();
 
     // Ultrasonic
-    readUltrasonic();
+    readUltrasonic(isScanning);
 }
 
 // ═══════════════════════════════════════════════════════════════════
 //  Private helpers
-// ═══════════════════════════════════════════════════════════════════
+// ════
 
 void percepetion::readIR()
 {
@@ -87,39 +87,40 @@ void percepetion::readIR()
     irLongRearFiltered += IR_EMA_ALPHA * ((float)analogRead(PIN_IR_LONG_REAR) - irLongRearFiltered);
 }
 
-void percepetion::readUltrasonic()
+// Add a flag to your perception class to toggle "Scan Mode" vs "Drive Mode"
+void percepetion::readUltrasonic(bool isScanning)
 {
-    // Standard HC-SR04 trigger sequence
     digitalWrite(PIN_US_TRIG, LOW);
     delayMicroseconds(2);
     digitalWrite(PIN_US_TRIG, HIGH);
     delayMicroseconds(10);
     digitalWrite(PIN_US_TRIG, LOW);
 
-    unsigned long pulse = pulseIn(PIN_US_ECHO, HIGH, US_MAX_PULSE_US);
+    // Hard-cap timeout to the absolute max dimension of the table + a tiny buffer
+    // Diagonal is ~2.33m -> 233 * 58 = 13514. Cap at 14000.
+    unsigned long pulse = pulseIn(PIN_US_ECHO, HIGH, 14000); 
     float rawCm = (pulse > 0) ? (float)pulse / 58.0f : 0.0f;
 
-    // No echo — keep previous filtered value
-    if (rawCm <= 0.0f) return;
-
-    // Spike rejection: if reading jumps too far from last valid, reject it.
-    // After 3 consecutive rejects, accept anyway (the robot actually moved).
-    if (usLastValidCm > 0.0f &&
-        fabsf(rawCm - usLastValidCm) > US_MAX_JUMP_CM &&
-        usRejectCount < 3)
-    {
-        usRejectCount++;
+    if (rawCm <= 0.0f) {
+        // If scanning, we WANT to know it failed so the FSM can ignore this angle
+        if (isScanning) usDistanceCm = -1.0f; 
         return;
     }
 
-    usRejectCount = 0;
-    usLastValidCm = rawCm;
+    if (!isScanning) {
+        // Only use spike rejection and EMA filtering for normal driving/wall-following
+        if (usLastValidCm > 0.0f && fabsf(rawCm - usLastValidCm) > US_MAX_JUMP_CM && usRejectCount < 3) {
+            usRejectCount++;
+            return;
+        }
+        usRejectCount = 0;
+        usLastValidCm = rawCm;
 
-    // EMA low-pass filter
-    if (usDistanceCm <= 0.0f) {
-        usDistanceCm = rawCm;  // seed on first valid reading
+        if (usDistanceCm <= 0.0f) usDistanceCm = rawCm;
+        else usDistanceCm += US_EMA_ALPHA * (rawCm - usDistanceCm);
     } else {
-        usDistanceCm += US_EMA_ALPHA * (rawCm - usDistanceCm);
+        // Feed raw data directly during the scan to prevent phase lag
+        usDistanceCm = rawCm;
     }
 }
 

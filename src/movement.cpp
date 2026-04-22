@@ -120,6 +120,7 @@ float movement::headingCorrection()
     float raw_derivative = (error - prev_error) / dt;
     filtered_derivative = 0.7f * filtered_derivative + 0.3f * raw_derivative;
     prev_error = error;
+    
 
     return Kp * error + Ki * integral + Kd * filtered_derivative;
 }

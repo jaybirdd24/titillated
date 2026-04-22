@@ -6,6 +6,7 @@
 percepetion perception;
 movement    motors(&perception);
 fsm         stateMachine(&perception, &motors);
+bool isScanning = false;
 
 static const char* stateName(RobotState s) {
     switch (s) {
@@ -37,7 +38,7 @@ void setup() {
     // settle gyro
     unsigned long settle = millis();
     while (millis() - settle < 500) {
-        perception.update();
+        perception.update(isScanning);
     }
 
     Serial.println("=== START ===");
@@ -45,7 +46,8 @@ void setup() {
 }
 
 void loop() {
-    perception.update();
+    isScanning = (stateMachine.getState() == HOMING_SCAN);
+    perception .update(isScanning);
     stateMachine.fsmUpdate();
 
     static unsigned long lastPrint = 0;

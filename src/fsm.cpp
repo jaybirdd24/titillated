@@ -12,10 +12,10 @@ static const float TROUGH_BAND_CM         = 1.5f;     // distance above min that
 static const int   MIN_TROUGH_SAMPLES     = 3;
 const float OPPOSITE_TOL_DEG = 20.0f;
 
-static const int   RETURN_SPIN_FAST       = 110;
-static const int   RETURN_SPIN_SLOW       = 90;
+static const int   RETURN_SPIN_FAST       = 130;
+static const int   RETURN_SPIN_SLOW       = 110;
 static const float RETURN_SLOW_BAND_DEG   = 10.0f;
-static const float RETURN_STOP_TOL_DEG    = 2.0f;
+static const float RETURN_STOP_TOL_DEG    = 3.0f;
 static const unsigned long RETURN_STABLE_MS = 250;
 
 
@@ -255,19 +255,25 @@ bool fsm::chooseLongWallTarget(const WallTrough troughs[], int troughCount,
     if (pairCount <= 0) return false;
 
     int bestPair = -1;
-    float bestSpan = 1e9f;
+    float bestError = 1e9f;
+    const float EXPECTED_LONG_WALL_SPAN_CM = 115.7f; // Width of your table
 
     for (int i = 0; i < pairCount; i++) {
-        if (pairs[i].spanCm < bestSpan) {
-            bestSpan = pairs[i].spanCm;
+        // Find the pair whose total span is closest to 121.7 cm
+        float err = fabsf(pairs[i].spanCm - EXPECTED_LONG_WALL_SPAN_CM);
+        if (err < bestError) {
+            bestError = err;
             bestPair = i;
         }
     }
-    if (bestPair < 0) return false;
+    
+    // If even the best pair is wildly off (e.g., error > 15cm), data is bad
+    if (bestPair < 0 || bestError > 15.0f) return false;
 
     const WallTrough &t1 = troughs[pairs[bestPair].a];
     const WallTrough &t2 = troughs[pairs[bestPair].b];
 
+    // Pick the closest of the two long walls to square up against
     const WallTrough &chosen = (t1.minDistCm <= t2.minDistCm) ? t1 : t2;
 
     targetHeading = chosen.centerHeading;
@@ -360,11 +366,10 @@ void fsm::doHoming() {
                 lastSampleMs = now;
                 float usRaw = perception->getUltrasonicCm();
                 if (usRaw < US_MIN_CM || usRaw > US_MAX_CM) usRaw = -1.0f;
-                float usFilt = usMovingAverage(usRaw);
 
                 if (scanCount < MAX_SCAN_SAMPLES) {
                     scanHeadings[scanCount]  = heading;
-                    scanDistances[scanCount] = usFilt;
+                    scanDistances[scanCount] = usRaw;
                     scanCount++;
                 }
             }
@@ -417,30 +422,49 @@ void fsm::doHoming() {
     break;
 
     case HOMING_RETURN:
-        updateHeading();
-        {
-            float errDeg = signedAngleErrorDeg(scanTargetHeading, heading);
-            float absErr = fabsf(errDeg);
-            unsigned long now = millis();
 
-            if (absErr <= RETURN_STOP_TOL_DEG) {
-                motors->Stop(true);
-                if (!returnInTolActive) {
-                    returnInTolActive = true;
-                    returnInTolStart  = now;
-                } else if (now - returnInTolStart >= RETURN_STABLE_MS) {
-                    Serial.println("Facing wall — moving right");
-                    state = HOMING_APPROACH_WALL;
-                }
-            } else {
-                returnInTolActive = false;
-                int spd = (absErr < RETURN_SLOW_BAND_DEG) ? RETURN_SPIN_SLOW : RETURN_SPIN_FAST;
-                if (errDeg > 0.0f)
-                    motors->RotateCCW(spd);
-                else
-                    motors->RotateCW(spd);
+    updateHeading();
+    {
+        float errDeg = signedAngleErrorDeg(scanTargetHeading, heading);
+        float absErr = fabsf(errDeg);
+        unsigned long now = millis();
+
+        // 1. Calculate Derivative (rate of change of error)
+        static float lastErr = 0;
+        static unsigned long lastTime = 0;
+        float dt = (now - lastTime) / 1000.0f;
+        float derivative = (dt > 0) ? (errDeg - lastErr) / dt : 0;
+        
+        lastErr = errDeg;
+        lastTime = now;
+
+        // 2. Controller Constants (TUNE THESE)
+        float Kp = 15.0f;  // Proportional: How hard to turn based on error
+        float Kd = 1.2f;  // Derivative: How much to "brake" to prevent overshoot
+
+        // 3. Calculate Output
+        float output = (Kp * errDeg) + (Kd * derivative);
+        
+        // Clamp the output to your motor limits
+        int motorSpeed = (int)constrain(output, -RETURN_SPIN_FAST, RETURN_SPIN_FAST);
+
+        // 4. Deadband/Stop Logic
+        if (absErr <= RETURN_STOP_TOL_DEG && fabsf(derivative) < 2.0f) {
+            // Stop if we are close AND our rotation speed is nearly zero
+            motors->Stop(true);
+            if (!returnInTolActive) {
+                returnInTolActive = true;
+                returnInTolStart = now;
+            } else if (now - returnInTolStart >= RETURN_STABLE_MS) {
+                state = HOMING_APPROACH_WALL;
             }
+        } else {
+            returnInTolActive = false;
+            // Apply speed (positive CCW, negative CW)
+            if (motorSpeed > 0) motors->RotateCCW(motorSpeed);
+            else motors->RotateCW(abs(motorSpeed));
         }
+    }
         break;
 
     case HOMING_APPROACH_WALL:
