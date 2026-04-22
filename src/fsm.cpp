@@ -10,6 +10,7 @@ static const float US_MIN_CM              = 2.0f;
 static const float US_MAX_CM              = 130.0f;
 static const float TROUGH_BAND_CM         = 1.5f;     // distance above min that counts as trough
 static const int   MIN_TROUGH_SAMPLES     = 3;
+const float OPPOSITE_TOL_DEG = 20.0f;
 
 static const int   RETURN_SPIN_FAST       = 110;
 static const int   RETURN_SPIN_SLOW       = 90;
@@ -36,7 +37,7 @@ static const float FRONT_STOP_MM      = 100.0f;///and this one
 static const float LEFT_IGNORE_MM     = 110.0f;
 static const int   LEFT_CONFIRM_N     = 20;
 static const int   LEFT_RESET_N       = 10;
-static const unsigned long STRAFE_TIME_MS = 594;//tune the strafe time between cuts
+static const unsigned long STRAFE_TIME_MS = 525;//tune the strafe time between cuts
 static const float STRAFE_DECEL_KP       =   3.0f; // ramp down strafe speed near target
 static const float STRAFE_MIN_SPEED      =  60.0f;  // don't go slower than this during strafe
 
@@ -56,7 +57,9 @@ static const float WF_KP          = 30.0f;
 static const float WF_KI          =  0.5f;
 static const float WF_MAX_INT     = 200.0f;
 
-// ─────────────────────────────────────────────────────────────────────────────
+
+
+// ────────────────────────────────────────────────────────────────────────────
 
 fsm::fsm(percepetion *perception, movement *motors)
     : perception(perception), motors(motors),
@@ -87,7 +90,7 @@ void fsm::updateHeading() {
     unsigned long now = micros();
     float dt = (now - lastUpdateUs) / 1e6f;
     lastUpdateUs = now;
-    heading += perception->getGyroZ() * (180.0f / PI) * dt;
+    heading += perception->getGyroZ() * (180.0f / PI) * dt; 
 }
 
 // ── US moving-average filter ─────────────────────────────────────────────────
@@ -116,18 +119,34 @@ float fsm::usMovingAverage(float us) {
 
 // ── Scan analysis ────────────────────────────────────────────────────────────
 
-bool fsm::findGlobalMinIndex(int &minIdx) {
-    minIdx = -1;
-    float best = 1e9f;
-    for (int i = 0; i < scanCount; i++) {
-        float d = scanDistances[i];
-        if (d >= US_MIN_CM && d <= US_MAX_CM && d < best) {
-            best = d;
-            minIdx = i;
-        }
-    }
-    return (minIdx >= 0);
+float wrap360(float a) {
+    while (a < 0.0f) a += 360.0f;
+    while (a >= 360.0f) a -= 360.0f;
+    return a;
 }
+
+float angleDiffDeg(float a, float b) {
+    float d = wrap360(a - b);
+    if (d > 180.0f) d = 360.0f - d;
+    return d;
+}
+
+float signedAngleErrorDeg(float target, float current) {
+    float e = target - current;
+    while (e > 180.0f) e -= 360.0f;
+    while (e < -180.0f) e += 360.0f;
+    return e;
+}
+
+float circularMeanDeg(float a, float b) {
+    float aRad = a * DEG_TO_RAD;
+    float bRad = b * DEG_TO_RAD;
+    float x = cosf(aRad) + cosf(bRad);
+    float y = sinf(aRad) + sinf(bRad);
+    float ang = atan2f(y, x) * 180.0f / PI;
+    return wrap360(ang);
+}
+
 
 bool fsm::findTrough(int minIdx, int &leftIdx, int &rightIdx) {
     if (minIdx < 0 || minIdx >= scanCount) return false;
@@ -149,6 +168,111 @@ bool fsm::findTrough(int minIdx, int &leftIdx, int &rightIdx) {
         rightIdx++;
     }
     return (rightIdx - leftIdx + 1) >= MIN_TROUGH_SAMPLES;
+}
+
+int fsm::findAllTroughs(WallTrough troughs[], int maxTroughs) {
+    int count = 0;
+
+    for (int i = 1; i < scanCount - 1; i++) {
+        float d = scanDistances[i];
+        if (d < US_MIN_CM || d > US_MAX_CM) continue;
+
+        float dPrev = scanDistances[i - 1];
+        float dNext = scanDistances[i + 1];
+
+        if (dPrev < US_MIN_CM || dPrev > US_MAX_CM) continue;
+        if (dNext < US_MIN_CM || dNext > US_MAX_CM) continue;
+
+        // local minimum candidate
+        if (d <= dPrev && d <= dNext) {
+            int leftIdx, rightIdx;
+            if (!findTrough(i, leftIdx, rightIdx)) continue;
+
+            // avoid duplicates from multiple minima inside same trough
+            bool overlaps = false;
+            for (int k = 0; k < count; k++) {
+                if (!(rightIdx < troughs[k].leftIdx || leftIdx > troughs[k].rightIdx)) {
+                    overlaps = true;
+                    // keep the deeper trough minimum if needed
+                    if (d < troughs[k].minDistCm) {
+                        troughs[k].leftIdx = leftIdx;
+                        troughs[k].minIdx = i;
+                        troughs[k].rightIdx = rightIdx;
+                        troughs[k].centerHeading = circularMeanDeg(scanHeadings[leftIdx], scanHeadings[rightIdx]);
+                        troughs[k].minDistCm = d;
+                    }
+                    break;
+                }
+            }
+            if (overlaps) continue;
+
+            if (count < maxTroughs) {
+                troughs[count].leftIdx = leftIdx;
+                troughs[count].minIdx = i;
+                troughs[count].rightIdx = rightIdx;
+                troughs[count].centerHeading = circularMeanDeg(scanHeadings[leftIdx], scanHeadings[rightIdx]);
+                troughs[count].minDistCm = d;
+                count++;
+            }
+        }
+    }
+
+    return count;
+}
+
+int fsm::findOppositePairs(const WallTrough troughs[], int troughCount,
+                           OppositePair pairs[], int maxPairs) {
+    int count = 0;
+
+    for (int i = 0; i < troughCount; i++) {
+        for (int j = i + 1; j < troughCount; j++) {
+            float directSep = angleDiffDeg(troughs[i].centerHeading,
+                                           troughs[j].centerHeading);
+
+            // easier to think of it directly as "close to 180"
+            float err180 = fabsf(directSep - 180.0f);
+
+            if (err180 <= OPPOSITE_TOL_DEG) {
+                if (count < maxPairs) {
+                    pairs[count].a = i;
+                    pairs[count].b = j;
+                    pairs[count].headingSepDeg = directSep;
+                    pairs[count].spanCm =
+                        troughs[i].minDistCm + troughs[j].minDistCm;
+                    count++;
+                }
+            }
+        }
+    }
+
+    return count;
+}
+
+bool fsm::chooseLongWallTarget(const WallTrough troughs[], int troughCount,
+                               float &targetHeading, float &targetDistCm) {
+    OppositePair pairs[8];
+    int pairCount = findOppositePairs(troughs, troughCount, pairs, 8);
+    if (pairCount <= 0) return false;
+
+    int bestPair = -1;
+    float bestSpan = 1e9f;
+
+    for (int i = 0; i < pairCount; i++) {
+        if (pairs[i].spanCm < bestSpan) {
+            bestSpan = pairs[i].spanCm;
+            bestPair = i;
+        }
+    }
+    if (bestPair < 0) return false;
+
+    const WallTrough &t1 = troughs[pairs[bestPair].a];
+    const WallTrough &t2 = troughs[pairs[bestPair].b];
+
+    const WallTrough &chosen = (t1.minDistCm <= t2.minDistCm) ? t1 : t2;
+
+    targetHeading = chosen.centerHeading;
+    targetDistCm = chosen.minDistCm;
+    return true;
 }
 
 // ── Left wall detection ───────────────────────────────────────────────────────
@@ -256,34 +380,46 @@ void fsm::doHoming() {
         break;
 
     case HOMING_ANALYSE:
-        {
-            if (!findGlobalMinIndex(globalMinIdx)) {
-                Serial.println("ERROR: no valid minimum found — retrying");
-                state = HOMING_IDLE;
-                break;
-            }
-            chosenMinDistCm = scanDistances[globalMinIdx];
+{
+    WallTrough troughs[8];
+    int troughCount = findAllTroughs(troughs, 8);
 
-            int leftIdx, rightIdx;
-            if (findTrough(globalMinIdx, leftIdx, rightIdx)) {
-                scanTargetHeading = 0.5f * (scanHeadings[leftIdx] + scanHeadings[rightIdx]);
-            } else {
-                scanTargetHeading = scanHeadings[globalMinIdx];
-            }
+    Serial.print("Found troughs: ");
+    Serial.println(troughCount);
 
-            Serial.print("Min dist=");
-            Serial.print(chosenMinDistCm, 1);
-            Serial.print(" cm, target heading=");
-            Serial.println(scanTargetHeading, 1);
-            returnInTolActive = false;
-            state = HOMING_RETURN;
-        }
+    for (int i = 0; i < troughCount; i++) {
+        Serial.print("T");
+        Serial.print(i);
+        Serial.print(": min=");
+        Serial.print(troughs[i].minDistCm, 1);
+        Serial.print(" cm, center=");
+        Serial.println(troughs[i].centerHeading, 1);
+    }
+
+    float targetHeading, targetDistCm;
+    if (!chooseLongWallTarget(troughs, troughCount, targetHeading, targetDistCm)) {
+        Serial.println("ERROR: could not identify long-wall pair, retrying");
+        state = HOMING_IDLE;
         break;
+    }
+
+    scanTargetHeading = targetHeading;
+    chosenMinDistCm = targetDistCm;
+
+    Serial.print("Chosen long-wall target dist=");
+    Serial.print(chosenMinDistCm, 1);
+    Serial.print(" cm, heading=");
+    Serial.println(scanTargetHeading, 1);
+
+    returnInTolActive = false;
+    state = HOMING_RETURN;
+    }
+    break;
 
     case HOMING_RETURN:
         updateHeading();
         {
-            float errDeg = scanTargetHeading - heading;
+            float errDeg = signedAngleErrorDeg(scanTargetHeading, heading);
             float absErr = fabsf(errDeg);
             unsigned long now = millis();
 
