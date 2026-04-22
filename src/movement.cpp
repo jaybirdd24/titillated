@@ -23,6 +23,7 @@ movement::movement(percepetion *perception)
       integral(0.0f), prev_error(0.0f), filtered_derivative(0.0f),
       integral_vy(0.0f), prev_error_vy(0.0f), filtered_derivative_vy(0.0f),
       last_wall_us(0),
+      last_vx(0), last_vy(0), last_wz(0),
       current_speeds{0, 0, 0, 0}, last_slew_us(0)
 {
 }
@@ -126,6 +127,7 @@ float movement::headingCorrection()
 
 void movement::drive(int vx, int vy, int wz)
 {
+    last_vx = vx; last_vy = vy; last_wz = wz;
     // Mecanum IK — verified against existing motor sign conventions:
     //   vx+  → forward  (LF+, LR+, RR-, RF-)
     //   vy+  → strafe left (LF-, LR+, RR+, RF-)

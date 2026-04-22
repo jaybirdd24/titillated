@@ -38,6 +38,9 @@ class movement
         float filtered_derivative_vy;
         unsigned long last_wall_us;
 
+        // Last commanded drive values (set by drive())
+        int last_vx, last_vy, last_wz;
+
         // Slew-rate limiting
         float current_speeds[4];       // actual speeds being sent (LF, LR, RR, RF)
         unsigned long last_slew_us;
@@ -79,8 +82,14 @@ class movement
         // Set the desired global heading (degrees); use before/after a turn
         void setTargetHeading(float degrees);
 
-        // Read the current integrated heading
-        float getHeading() const { return heading; }
+        // Read the current integrated heading and target
+        float getHeading()       const { return heading; }
+        float getTargetHeading() const { return target_heading; }
+
+        // Last drive command sent
+        int getLastVx() const { return last_vx; }
+        int getLastVy() const { return last_vy; }
+        int getLastWz() const { return last_wz; }
 
         // In-place rotation (integrates gyroZ into heading so PID stays valid)
         void RotateCW(int speed);

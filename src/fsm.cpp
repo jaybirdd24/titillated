@@ -1,4 +1,5 @@
 #include "fsm.h"
+#include "comms.h"
 #include <Arduino.h>
 #include <math.h>
 

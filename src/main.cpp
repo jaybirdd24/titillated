@@ -2,6 +2,9 @@
 #include "percepetion.h"
 #include "movement.h"
 #include "fsm.h"
+#include "comms.h"
+
+SoftwareSerial WirelessSerial(10, 11);  // RX, TX — change pins here
 
 percepetion perception;
 movement    motors(&perception);
@@ -29,7 +32,7 @@ static const char* stateName(RobotState s) {
 }
 
 void setup() {
-    Serial.begin(115200);
+    WirelessSerial.begin(115200);
     perception.init();
     motors.enable();
     delay(2000);
@@ -40,24 +43,49 @@ void setup() {
         perception.update();
     }
 
-    Serial.println("=== START ===");
-    Serial.println("State,Heading,US_cm");
+    WirelessSerial.println("=== START ===");
+    // CSV header
+    WirelessSerial.println(
+        "t_ms,state_id,state,heading_deg,target_hdg_deg,"
+        "gyro_z_rads,vx_cmd,vy_cmd,wz_cmd,"
+        "ir_front_mm,ir_rear_mm,ir_left_mm,ir_right_mm,us_cm"
+    );
 }
 
 void loop() {
     perception.update();
+
+    // Detect state transitions and emit EVT lines
+    static RobotState prevState = HOMING_IDLE;
+    RobotState curState = stateMachine.getState();
+    if (curState != prevState) {
+        WirelessSerial.print("EVT:");
+        WirelessSerial.print(millis());
+        WirelessSerial.print(" state_enter ");
+        WirelessSerial.println(stateName(curState));
+        prevState = curState;
+    }
+
     stateMachine.fsmUpdate();
 
+    // 20 Hz structured telemetry
     static unsigned long lastPrint = 0;
-    if (millis() - lastPrint >= 100) {
+    if (millis() - lastPrint >= 50) {
         lastPrint = millis();
-        // Serial.print(stateName(stateMachine.getState()));
-        // Serial.print(",");
-        // Serial.print(stateMachine.getHeading(), 1);
-        // Serial.print(",");
-        // Serial.println(perception.getUltrasonicCm(), 1);
-        float length = perception.getIRLongLeft();
-        Serial.print("IR long left (mm): ");
-        Serial.println(length, 1);
+
+        WirelessSerial.print(millis());               WirelessSerial.print(',');
+        WirelessSerial.print((int)curState);          WirelessSerial.print(',');
+        WirelessSerial.print(stateName(curState));    WirelessSerial.print(',');
+        WirelessSerial.print(motors.getHeading(), 2); WirelessSerial.print(',');
+        WirelessSerial.print(motors.getTargetHeading(), 2); WirelessSerial.print(',');
+        WirelessSerial.print(perception.getGyroZ(), 4); WirelessSerial.print(',');
+        WirelessSerial.print(motors.getLastVx());     WirelessSerial.print(',');
+        WirelessSerial.print(motors.getLastVy());     WirelessSerial.print(',');
+        WirelessSerial.print(motors.getLastWz());     WirelessSerial.print(',');
+        WirelessSerial.print(perception.getIRMedFront(), 1);  WirelessSerial.print(',');
+        WirelessSerial.print(perception.getIRLongRear(), 1);  WirelessSerial.print(',');
+        WirelessSerial.print(perception.getIRLongLeft(), 1);  WirelessSerial.print(',');
+        WirelessSerial.print(perception.getIRMedRight(), 1);  WirelessSerial.print(',');
+        WirelessSerial.println(perception.getUltrasonicCm(), 2);
     }
 }
