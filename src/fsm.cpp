@@ -36,7 +36,7 @@ static const float FRONT_STOP_MM      = 100.0f;///and this one
 static const float LEFT_IGNORE_MM     = 110.0f;
 static const int   LEFT_CONFIRM_N     = 20;
 static const int   LEFT_RESET_N       = 10;
-static const unsigned long STRAFE_TIME_MS = 594;//tune the strafe time between cuts
+static const unsigned long STRAFE_TIME_MS = 525;//tune the strafe time between cuts !!525 for 4V should work!!
 static const float STRAFE_DECEL_KP       =   3.0f; // ramp down strafe speed near target
 static const float STRAFE_MIN_SPEED      =  60.0f;  // don't go slower than this during strafe
 
