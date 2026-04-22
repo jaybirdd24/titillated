@@ -34,6 +34,21 @@ public:
     RobotState  getState()   const { return state; }
     float       getHeading() const { return heading; }
 
+    struct WallTrough {
+        int leftIdx;
+        int minIdx;
+        int rightIdx;
+        float centerHeading;
+        float minDistCm;
+    };
+
+    struct OppositePair {
+        int a;
+        int b;
+        float headingSepDeg;
+        float spanCm;
+    };
+
 private:
     percepetion  *perception;
     movement     *motors;
@@ -65,8 +80,12 @@ private:
     float  chosenMinDistCm;      // distance at global minimum
     int    globalMinIdx;
 
-    bool findGlobalMinIndex(int &minIdx);
     bool findTrough(int minIdx, int &leftIdx, int &rightIdx);
+    int  findAllTroughs(WallTrough troughs[], int maxTroughs);
+    int  findOppositePairs(const WallTrough troughs[], int troughCount,
+                          OppositePair pairs[], int maxPairs);
+    bool chooseLongWallTarget(const WallTrough troughs[], int troughCount,  
+                             float &targetHeading, float &targetDistCm);
 
     // Return state
     unsigned long returnInTolStart;
