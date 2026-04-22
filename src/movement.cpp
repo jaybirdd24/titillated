@@ -11,9 +11,9 @@ static const byte PIN_RIGHT_FRONT = 51;
 static const int PWM_NEUTRAL = 1500;
 
 // PID tuning — adjust during physical testing
-static const float DEFAULT_KP = 30.0f;
-static const float DEFAULT_KI = 0.01f;
-static const float DEFAULT_KD = 9.0f;
+static const float DEFAULT_KP = 40.0f;
+static const float DEFAULT_KI = 0.02f;
+static const float DEFAULT_KD = 5.0f;
 
 movement::movement(percepetion *perception)
     : perception(perception),
@@ -65,11 +65,15 @@ void movement::setMotorSpeeds(int lf, int lr, int rr, int rf)
     // Cap dt to avoid huge jumps after pauses
     if (dt > 0.1f) dt = 0.1f;
 
-    float max_delta = MAX_SLEW_RATE * dt;
+    float accel_delta = MAX_ACCEL_RATE * dt;
+    float decel_delta = MAX_DECEL_RATE * dt;
 
     float target[4] = {(float)lf, (float)lr, (float)rr, (float)rf};
     for (int i = 0; i < 4; i++) {
         float diff = target[i] - current_speeds[i];
+        // Accelerating = moving away from zero, decelerating = moving toward zero
+        bool accelerating = (fabsf(target[i]) > fabsf(current_speeds[i]));
+        float max_delta = accelerating ? accel_delta : decel_delta;
         if (diff >  max_delta) diff =  max_delta;
         if (diff < -max_delta) diff = -max_delta;
         current_speeds[i] += diff;
@@ -132,7 +136,7 @@ void movement::drive(int vx, int vy, int wz)
                    -vx - vy + wz);  // RF
 }
 
-float movement::wallFollowCorrection(float setpoint_mm)
+float movement::wallFollowCorrection(float setpoint_mm, bool followLeft)
 {
     unsigned long now = micros();
     float dt = (now - last_wall_us) / 1e6f;
@@ -140,8 +144,12 @@ float movement::wallFollowCorrection(float setpoint_mm)
 
     if (dt > 0.1f) dt = 0.1f;
 
-    float measured = perception->getUltrasonicCm() * 10.0f; // convert to mm for PID calculations   
-    float error = -measured + setpoint_mm;  // positive → too far from wall → strafe left
+    float measured = followLeft ? perception->getIRLongLeft()
+                                : perception->getIRMedRight();
+    // Right wall: positive error → too far → strafe left
+    // Left wall:  positive error → too close → strafe right (sign flipped)
+    float error = followLeft ? (measured - setpoint_mm)
+                             : (-measured + setpoint_mm);
 
     integral_vy += error * dt;
     integral_vy = constrain(integral_vy, -MAX_INTEGRAL_VY, MAX_INTEGRAL_VY);
@@ -149,6 +157,9 @@ float movement::wallFollowCorrection(float setpoint_mm)
     float raw_deriv = (error - prev_error_vy) / dt;
     filtered_derivative_vy = 0.7f * filtered_derivative_vy + 0.3f * raw_deriv;
     prev_error_vy = error;
+
+
+
 
     return KP_VY * error + KI_VY * integral_vy + KD_VY * filtered_derivative_vy;
 }
@@ -201,10 +212,17 @@ void movement::resetHeading()
     last_update_us = micros();
 }
 
+void movement::resetWallFollow()
+{
+    integral_vy = 0.0f;
+    prev_error_vy = 0.0f;
+    filtered_derivative_vy = 0.0f;
+    last_wall_us = micros();
+}
+
 void movement::Stop(bool immediate)
 {
     if (immediate) {
-        // Bypass slew-rate limiting for emergency stops
         current_speeds[0] = current_speeds[1] = current_speeds[2] = current_speeds[3] = 0;
         left_front_motor.writeMicroseconds(PWM_NEUTRAL);
         left_rear_motor.writeMicroseconds(PWM_NEUTRAL);

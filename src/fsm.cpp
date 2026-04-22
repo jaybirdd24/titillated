@@ -3,36 +3,79 @@
 #include <math.h>
 
 // ── Tuning ────────────────────────────────────────────────────────────────────
-static const int   ROTATE_SPEED       = 150;
-static const float US_SPIKE_THRESHOLD = 60000.0f;
-static const int   US_WARMUP_READINGS = 5;
-static const float RETURN_MIN_DEG     = 20.0f;
-static const int   RETURN_EXTRA_MS    = 100;
-static const float APPROACH_STOP_CM   = 15.0f;
-static const int   APPROACH_SPEED     = 200;
-static const float FORWARD_STOP_MM    = 150.0f;
-static const int   FORWARD_SPEED      = 200;
+// ── Scan / return tuning ─────────────────────────────────────────────────────
+static const int   SCAN_SPIN_SPEED        = 150;
+static const int   SCAN_SAMPLE_INTERVAL   = 50;       // ms between samples (20 Hz)
+static const float US_MIN_CM              = 2.0f;
+static const float US_MAX_CM              = 130.0f;
+static const float TROUGH_BAND_CM         = 1.5f;     // distance above min that counts as trough
+static const int   MIN_TROUGH_SAMPLES     = 3;
 
-static const int   MOVE_SPEED         = 200;
-static const float REAR_STOP_MM       = 150.0f;
-static const float FRONT_STOP_MM      = 150.0f;
-static const float LEFT_STOP_MM       = 120.0f;
+static const int   RETURN_SPIN_FAST       = 110;
+static const int   RETURN_SPIN_SLOW       = 90;
+static const float RETURN_SLOW_BAND_DEG   = 10.0f;
+static const float RETURN_STOP_TOL_DEG    = 2.0f;
+static const unsigned long RETURN_STABLE_MS = 250;
+
+
+static const float APPROACH_STOP_CM   = 15.0f;//change this for better score
+
+
+static const int   APPROACH_SPEED     = 200;
+static const float FORWARD_STOP_MM    = 100.0f;//and this one
+static const int   FORWARD_SPEED      = 250;
+
+
+
+static const float LEFT_STOP_MM       = 150.0f;
+
+
+static const int   MOVE_SPEED         = 400;
+static const float REAR_STOP_MM       = 100.0f;//and this one
+static const float FRONT_STOP_MM      = 100.0f;///and this one
 static const float LEFT_IGNORE_MM     = 110.0f;
 static const int   LEFT_CONFIRM_N     = 20;
 static const int   LEFT_RESET_N       = 10;
-static const unsigned long STRAFE_TIME_MS = 800;
+static const unsigned long STRAFE_TIME_MS = 594;//tune the strafe time between cuts
+static const float STRAFE_DECEL_KP       =   3.0f; // ramp down strafe speed near target
+static const float STRAFE_MIN_SPEED      =  60.0f;  // don't go slower than this during strafe
+
+static const int   RAM_SPEED              = 200;     // speed to drive into wall
+static const unsigned long RAM_TIME_MS    = 1500;    // how long to press against wall
+static const float BACK_OFF_TARGET_MM     = 86.0f;   // IR med right target after backing off
+static const float BACK_OFF_TOLERANCE_MM  = 9.0f;    // close enough
+static const float BACK_OFF_KP            = 9.5f;
+static const float BACK_OFF_MAX_SPEED     = 120.0f;
+static const float BACK_OFF_MIN_SPEED     = 40.0f;
+static const unsigned long BACK_OFF_HOLD_MS = 250;   // hold in range before starting run
+
+static const float WF_SETPOINT_CM = 9.5f;//and this one
+static const float WF_TOLERANCE_CM  = 1.0f;
+
+static const float WF_KP          = 30.0f;
+static const float WF_KI          =  0.5f;
+static const float WF_MAX_INT     = 200.0f;
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 fsm::fsm(percepetion *perception, movement *motors)
     : perception(perception), motors(motors),
       state(HOMING_IDLE),
       heading(0.0f), lastUpdateUs(0),
-      topCount(0), minUsDist(9999.0f), minUsHeading(0.0f),
-      lastValidUs(-1.0f), usReadingCount(0), lastSampleMs(0),
-      returnStartHeading(0.0f), returnExtraStart(-1), lastSampleUsMs(0),
-      strafeStart(0),
+      scanCount(0), scanStartHeading(0.0f),
+      usFilterCount(0), usFilterHead(0),
+      scanTargetHeading(0.0f), chosenMinDistCm(-1.0f), globalMinIdx(-1),
+      returnInTolStart(0), returnInTolActive(false),
+      lastSampleMs(0),
+      squareInRangeStart(-1), squareLastPrintMs(0), squareUsSmoothed(-1.0f),
+      squareIntegral(0.0f), squarePrevError(0.0f), squareLastUs(0),
+      ramStartMs(0), backOffInRangeStart(-1),
+      wf_integral(0.0f), wf_last_us(0),
+      strafeStartMs(0), runHeading(0.0f), runWfSetpoint(0.0f),
       leftWallSeen(false), leftNonIgnoreCount(0),
-      leftIgnoreCount(0), leftLastCountedMs(0)
+      leftIgnoreCount(0), leftLastCountedMs(0),
+      firstRun(true),
+      runCount(1)
 {
 }
 
@@ -47,36 +90,65 @@ void fsm::updateHeading() {
     heading += perception->getGyroZ() * (180.0f / PI) * dt;
 }
 
-// ── Top-N helpers ─────────────────────────────────────────────────────────────
+// ── US moving-average filter ─────────────────────────────────────────────────
 
-void fsm::insertTopN(float dist, float head) {
-    if (topCount < TOP_N) {
-        topDist[topCount] = dist;
-        topHead[topCount] = head;
-        topCount++;
-    } else {
-        int worst = 0;
-        for (int i = 1; i < TOP_N; i++)
-            if (topDist[i] > topDist[worst]) worst = i;
-        if (dist < topDist[worst]) {
-            topDist[worst] = dist;
-            topHead[worst] = head;
+void fsm::resetUsFilter() {
+    usFilterCount = 0;
+    usFilterHead  = 0;
+    for (int i = 0; i < US_FILTER_SIZE; i++) usFilterBuf[i] = -1.0f;
+}
+
+float fsm::usMovingAverage(float us) {
+    usFilterBuf[usFilterHead] = us;
+    usFilterHead = (usFilterHead + 1) % US_FILTER_SIZE;
+    if (usFilterCount < US_FILTER_SIZE) usFilterCount++;
+
+    float sum = 0.0f;
+    int valid = 0;
+    for (int i = 0; i < usFilterCount; i++) {
+        if (usFilterBuf[i] >= US_MIN_CM && usFilterBuf[i] <= US_MAX_CM) {
+            sum += usFilterBuf[i];
+            valid++;
         }
     }
+    return (valid > 0) ? sum / (float)valid : -1.0f;
 }
 
-float fsm::avgTopHeading() {
-    if (topCount == 0) return 0.0f;
-    float sum = 0.0f;
-    for (int i = 0; i < topCount; i++) sum += topHead[i];
-    return sum / topCount;
+// ── Scan analysis ────────────────────────────────────────────────────────────
+
+bool fsm::findGlobalMinIndex(int &minIdx) {
+    minIdx = -1;
+    float best = 1e9f;
+    for (int i = 0; i < scanCount; i++) {
+        float d = scanDistances[i];
+        if (d >= US_MIN_CM && d <= US_MAX_CM && d < best) {
+            best = d;
+            minIdx = i;
+        }
+    }
+    return (minIdx >= 0);
 }
 
-float fsm::avgTopDist() {
-    if (topCount == 0) return 9999.0f;
-    float sum = 0.0f;
-    for (int i = 0; i < topCount; i++) sum += topDist[i];
-    return sum / topCount;
+bool fsm::findTrough(int minIdx, int &leftIdx, int &rightIdx) {
+    if (minIdx < 0 || minIdx >= scanCount) return false;
+    float minVal = scanDistances[minIdx];
+    if (minVal < US_MIN_CM || minVal > US_MAX_CM) return false;
+
+    float threshold = minVal + TROUGH_BAND_CM;
+    leftIdx = minIdx;
+    rightIdx = minIdx;
+
+    while (leftIdx - 1 >= 0) {
+        float d = scanDistances[leftIdx - 1];
+        if (d < US_MIN_CM || d > US_MAX_CM || d > threshold) break;
+        leftIdx--;
+    }
+    while (rightIdx + 1 < scanCount) {
+        float d = scanDistances[rightIdx + 1];
+        if (d < US_MIN_CM || d > US_MAX_CM || d > threshold) break;
+        rightIdx++;
+    }
+    return (rightIdx - leftIdx + 1) >= MIN_TROUGH_SAMPLES;
 }
 
 // ── Left wall detection ───────────────────────────────────────────────────────
@@ -109,10 +181,29 @@ bool fsm::leftWallDetected() {
     }
 }
 
+// ── Wall-follow correction (APPROACH_FWD) ────────────────────────────────────
+
+int fsm::wfCorrection() {
+    unsigned long now = micros();
+    float dt = (now - wf_last_us) / 1e6f;
+    wf_last_us = now;
+    if (dt > 0.1f) dt = 0.1f;
+
+    float dist = perception->getUltrasonicCm();
+    if (dist <= 0.0f) return 0;
+
+    float error = dist - WF_SETPOINT_CM;
+    wf_integral += error * dt;
+    wf_integral = constrain(wf_integral, -WF_MAX_INT, WF_MAX_INT);
+
+    float vy = WF_KP * error + WF_KI * wf_integral;
+    return (int)constrain(-vy, -300, 300);
+}
+
 // ── Main update ───────────────────────────────────────────────────────────────
 
 void fsm::fsmUpdate() {
-    if (state <= HOMING_APPROACH_FWD)
+    if (state <= HOMING_BACK_OFF)
         doHoming();
     else
         doRun();
@@ -124,45 +215,67 @@ void fsm::doHoming() {
     switch (state) {
 
     case HOMING_IDLE:
-        heading        = 0.0f;
-        minUsDist      = 9999.0f;
-        minUsHeading   = 0.0f;
-        lastValidUs    = -1.0f;
-        usReadingCount = 0;
-        topCount       = 0;
-        lastUpdateUs   = micros();
-        state          = HOMING_SCAN;
+        heading           = 0.0f;
+        lastUpdateUs      = micros();
+        scanCount         = 0;
+        scanStartHeading  = 0.0f;
+        scanTargetHeading = 0.0f;
+        chosenMinDistCm   = -1.0f;
+        globalMinIdx      = -1;
+        returnInTolActive = false;
+        resetUsFilter();
+        lastSampleMs      = millis();
+        state             = HOMING_SCAN;
         break;
 
     case HOMING_SCAN:
         updateHeading();
         {
             unsigned long now = millis();
-            if (now - lastSampleMs >= 100) {
+            if (now - lastSampleMs >= (unsigned long)SCAN_SAMPLE_INTERVAL) {
                 lastSampleMs = now;
-                float usDist = perception->getUltrasonicCm();
-                usReadingCount++;
-                bool valid = (usReadingCount > US_WARMUP_READINGS) &&
-                             (usDist > 0.0f) &&
-                             (lastValidUs < 0.0f || fabsf(usDist - lastValidUs) <= US_SPIKE_THRESHOLD);
-                if (valid) {
-                    lastValidUs = usDist;
-                    insertTopN(usDist, heading);
-                    if (usDist < minUsDist) minUsDist = usDist;
+                float usRaw = perception->getUltrasonicCm();
+                if (usRaw < US_MIN_CM || usRaw > US_MAX_CM) usRaw = -1.0f;
+                float usFilt = usMovingAverage(usRaw);
+
+                if (scanCount < MAX_SCAN_SAMPLES) {
+                    scanHeadings[scanCount]  = heading;
+                    scanDistances[scanCount] = usFilt;
+                    scanCount++;
                 }
             }
         }
-        motors->RotateCCW(ROTATE_SPEED);
+        motors->RotateCCW(SCAN_SPIN_SPEED);
         if (heading >= 360.0f) {
             motors->Stop(true);
-            lastUpdateUs      = micros();
-            returnStartHeading = heading;
-            returnExtraStart  = -1;
-            minUsHeading      = avgTopHeading();
-            Serial.print("Scan done. Avg dist=");
-            Serial.print(avgTopDist(), 1);
-            Serial.print(" heading=");
-            Serial.println(minUsHeading, 1);
+            Serial.print("Scan done. ");
+            Serial.print(scanCount);
+            Serial.println(" samples");
+            state = HOMING_ANALYSE;
+        }
+        break;
+
+    case HOMING_ANALYSE:
+        {
+            if (!findGlobalMinIndex(globalMinIdx)) {
+                Serial.println("ERROR: no valid minimum found — retrying");
+                state = HOMING_IDLE;
+                break;
+            }
+            chosenMinDistCm = scanDistances[globalMinIdx];
+
+            int leftIdx, rightIdx;
+            if (findTrough(globalMinIdx, leftIdx, rightIdx)) {
+                scanTargetHeading = 0.5f * (scanHeadings[leftIdx] + scanHeadings[rightIdx]);
+            } else {
+                scanTargetHeading = scanHeadings[globalMinIdx];
+            }
+
+            Serial.print("Min dist=");
+            Serial.print(chosenMinDistCm, 1);
+            Serial.print(" cm, target heading=");
+            Serial.println(scanTargetHeading, 1);
+            returnInTolActive = false;
             state = HOMING_RETURN;
         }
         break;
@@ -170,19 +283,26 @@ void fsm::doHoming() {
     case HOMING_RETURN:
         updateHeading();
         {
-            float rotated = returnStartHeading - heading;
-            float usDist  = perception->getUltrasonicCm();
-            if (rotated >= RETURN_MIN_DEG && usDist > 0.0f && usDist <= minUsDist + 2.0f) {
-                if (returnExtraStart < 0) returnExtraStart = millis();
-                if (millis() - (unsigned long)returnExtraStart >= (unsigned long)RETURN_EXTRA_MS) {
-                    motors->Stop(true);
+            float errDeg = scanTargetHeading - heading;
+            float absErr = fabsf(errDeg);
+            unsigned long now = millis();
+
+            if (absErr <= RETURN_STOP_TOL_DEG) {
+                motors->Stop(true);
+                if (!returnInTolActive) {
+                    returnInTolActive = true;
+                    returnInTolStart  = now;
+                } else if (now - returnInTolStart >= RETURN_STABLE_MS) {
                     Serial.println("Facing wall — moving right");
                     state = HOMING_APPROACH_WALL;
-                } else {
-                    motors->RotateCW(ROTATE_SPEED);
                 }
             } else {
-                motors->RotateCW(ROTATE_SPEED);
+                returnInTolActive = false;
+                int spd = (absErr < RETURN_SLOW_BAND_DEG) ? RETURN_SPIN_SLOW : RETURN_SPIN_FAST;
+                if (errDeg > 0.0f)
+                    motors->RotateCCW(spd);
+                else
+                    motors->RotateCW(spd);
             }
         }
         break;
@@ -205,10 +325,55 @@ void fsm::doHoming() {
             float frontMm = perception->getIRMedFront();
             if (frontMm > 0.0f && frontMm < FORWARD_STOP_MM) {
                 motors->Stop(true);
-                Serial.println("At front wall — starting run");
-                state = RUN_MOVE_DOWN;
+                ramStartMs = millis();
+                Serial.println("At front wall — ramming right wall to square up");
+                state = HOMING_RAM_WALL;
             } else {
-                motors->MoveForward(FORWARD_SPEED);
+                int vy = wfCorrection();
+                motors->drive(FORWARD_SPEED, vy, (int)motors->headingCorrection());
+            }
+        }
+        break;
+
+    case HOMING_RAM_WALL:
+        if (millis() - ramStartMs >= RAM_TIME_MS) {
+            motors->Stop(true);
+            backOffInRangeStart = -1;
+            Serial.println("Corner rammed — backing off to 86 mm");
+            state = HOMING_BACK_OFF;
+        } else {
+            motors->MoveForward(RAM_SPEED);
+        }
+        break;
+
+    case HOMING_BACK_OFF:
+        {
+            float ir_mm = perception->getIRMedRight();
+            if (ir_mm <= 0.0f) break;
+
+            float error = -ir_mm + BACK_OFF_TARGET_MM;
+            unsigned long now = millis();
+
+            if (fabsf(error) < BACK_OFF_TOLERANCE_MM) {
+                motors->Stop(true);
+                if (backOffInRangeStart < 0) backOffInRangeStart = (long)now;
+                if (now - (unsigned long)backOffInRangeStart >= BACK_OFF_HOLD_MS) {
+                    runHeading = motors->getHeading();
+                    runWfSetpoint = ir_mm;
+                    motors->resetWallFollow();
+                    Serial.print("Squared up — backed off to ");
+                    Serial.print(ir_mm, 1);
+                    Serial.println(" mm — starting run");
+                    state = RUN_MOVE_DOWN;
+                }
+            } else {
+                backOffInRangeStart = -1;
+                int speed = (int)constrain(fabsf(BACK_OFF_KP * error),
+                                           BACK_OFF_MIN_SPEED, BACK_OFF_MAX_SPEED);
+                if (error > 0.0f)
+                    motors->MoveLeft(speed);   // too far from wall → move left (away)
+                else
+                    motors->MoveRight(speed);  // too close → move right (closer)
             }
         }
         break;
@@ -224,27 +389,47 @@ void fsm::doRun() {
     switch (state) {
 
     case RUN_MOVE_DOWN:
-        if (leftWallDetected()) {
-            motors->Stop(true);
-            Serial.println("Left wall — final move down");
-            state = RUN_FINAL_MOVE_DOWN;
-            break;
-        }
         {
             float rearMm = perception->getIRLongRear();
             if (rearMm > 0.0f && rearMm <= REAR_STOP_MM) {
                 motors->Stop(true);
-                strafeStart = millis();
+                motors->setTargetHeading(runHeading);
+                strafeStartMs = millis();
+                Serial.println("Rear wall — strafing left");
+                firstRun = false;
                 state = RUN_STRAFE_LEFT_A;
             } else {
-                motors->MoveBackward(MOVE_SPEED);
+                if (firstRun) {
+                    int vy = (int)motors->wallFollowCorrection(87.0f);
+                    motors->drive(-MOVE_SPEED, vy, (int)motors->headingCorrection());
+                } else if (runCount >= 9) {
+                    int vy = (int)motors->wallFollowCorrection(187.0f, true);
+                    motors->drive(-MOVE_SPEED, vy, (int)motors->headingCorrection());
+                } else {
+                    motors->drive(-MOVE_SPEED, 0, (int)motors->headingCorrection());
+                }
             }
         }
         break;
 
     case RUN_STRAFE_LEFT_A:
-        if (millis() - strafeStart >= STRAFE_TIME_MS) {
+        {
+
+        }
+        if (millis() - strafeStartMs >= STRAFE_TIME_MS) {
             motors->Stop(true);
+            motors->setTargetHeading(runHeading);
+            runCount++;
+            Serial.print("Strafe done — move up (run ");
+            Serial.print(runCount);
+            Serial.println(")");
+                        if (runCount >= 10) {
+                motors->Stop(true);
+                motors->setTargetHeading(runHeading);
+                Serial.println("Run count >= 9 — final move up");
+                state = RUN_FINAL_MOVE_UP;
+                break;
+            }
             state = RUN_MOVE_UP;
         } else {
             motors->MoveLeft(MOVE_SPEED);
@@ -252,27 +437,43 @@ void fsm::doRun() {
         break;
 
     case RUN_MOVE_UP:
-        if (leftWallDetected()) {
-            motors->Stop(true);
-            Serial.println("Left wall — final move up");
-            state = RUN_FINAL_MOVE_UP;
-            break;
-        }
         {
             float frontMm = perception->getIRMedFront();
             if (frontMm > 0.0f && frontMm <= FRONT_STOP_MM) {
                 motors->Stop(true);
-                strafeStart = millis();
+                motors->setTargetHeading(runHeading);
+                strafeStartMs = millis();
+                Serial.println("Front wall — strafing left");
                 state = RUN_STRAFE_LEFT_B;
             } else {
-                motors->MoveForward(MOVE_SPEED);
+                if (runCount >= 9) {
+                    int vy = (int)motors->wallFollowCorrection(187.0f, true);
+                    motors->drive(MOVE_SPEED, vy, (int)motors->headingCorrection());
+                } else {
+                    motors->drive(MOVE_SPEED, 0, (int)motors->headingCorrection());
+                }
             }
         }
         break;
 
     case RUN_STRAFE_LEFT_B:
-        if (millis() - strafeStart >= STRAFE_TIME_MS) {
+        {
+
+        }
+        if (millis() - strafeStartMs >= STRAFE_TIME_MS) {
             motors->Stop(true);
+            motors->setTargetHeading(runHeading);
+            runCount++;
+            Serial.print("Strafe done — move down (run ");
+            Serial.print(runCount);
+            Serial.println(")");
+                        if (runCount >= 10) {
+                motors->Stop(true);
+                motors->setTargetHeading(runHeading);
+                Serial.println("Run count >= 9 — final move down");
+                state = RUN_FINAL_MOVE_DOWN;
+                break;
+            }
             state = RUN_MOVE_DOWN;
         } else {
             motors->MoveLeft(MOVE_SPEED);
@@ -287,7 +488,8 @@ void fsm::doRun() {
                 Serial.println("DONE");
                 state = STATE_DONE;
             } else {
-                motors->MoveBackward(MOVE_SPEED);
+                int vy = (int)motors->wallFollowCorrection(100.0f, true);
+                motors->drive(-MOVE_SPEED, vy, (int)motors->headingCorrection());
             }
         }
         break;
@@ -300,7 +502,8 @@ void fsm::doRun() {
                 Serial.println("DONE");
                 state = STATE_DONE;
             } else {
-                motors->MoveForward(MOVE_SPEED);
+                int vy = (int)motors->wallFollowCorrection(100.0f, true);
+                motors->drive(MOVE_SPEED, vy, (int)motors->headingCorrection());
             }
         }
         break;
