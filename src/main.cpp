@@ -12,7 +12,7 @@ fsm         stateMachine(&perception, &motors);
 static SoftwareSerial WirelessSerial(10, 11);   // RX, TX
 
 // Logging configuration
-static const unsigned long LOG_INTERVAL_MS = 100;   // 10 Hz
+static const unsigned long LOG_INTERVAL_MS = 150;   // 10 Hz
 static unsigned long lastLogMs = 0;
 static uint32_t logSeq = 0;
 static RobotState lastLoggedState = HOMING_IDLE;
@@ -50,7 +50,7 @@ static void printFloatOrNA(Stream &out, float v, int dp = 2) {
 static void logHeader(Stream &out) {
     out.println(
         "t_ms,seq,type,state,heading_deg,gyroZ_rads,us_cm,"
-        "ir_long_left_mm,ir_long_rear_mm,ir_med_front_mm,ir_med_right_mm"
+        "ir_long_rear_mm,ir_med_front_mm,ir_med_right_mm"
     );
 }
 
@@ -58,25 +58,22 @@ static void logRow(Stream &out, const char *typeTag) {
     out.print(millis());
     out.print(",");
 
-    out.print(logSeq++);
-    out.print(",");
+    // out.print(logSeq++);
+    // out.print(",");
 
-    out.print(typeTag);
-    out.print(",");
+    // out.print(typeTag);
+    // out.print(",");
 
     out.print(stateName(stateMachine.getState()));
     out.print(",");
 
-    printFloatOrNA(out, stateMachine.getHeading(), 2);
-    out.print(",");
+    // printFloatOrNA(out, stateMachine.getHeading(), 2);
+    // out.print(",");
 
-    printFloatOrNA(out, perception.getGyroZ(), 4);
-    out.print(",");
+    // printFloatOrNA(out, perception.getGyroZ(), 4);
+    // out.print(",");
 
     printFloatOrNA(out, perception.getUltrasonicCm(), 2);
-    out.print(",");
-
-    printFloatOrNA(out, perception.getIRLongLeft(), 1);
     out.print(",");
 
     printFloatOrNA(out, perception.getIRLongRear(), 1);
