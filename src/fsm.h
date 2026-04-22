@@ -31,8 +31,11 @@ public:
     ~fsm();
 
     void        fsmUpdate();
-    RobotState  getState()   const { return state; }
-    float       getHeading() const { return heading; }
+    RobotState  getState()    const { return state; }
+    float       getHeading()  const { return heading; }
+    int         getLastVx()   const { return lastCmdVx; }
+    int         getLastVy()   const { return lastCmdVy; }
+    int         getLastWz()   const { return lastCmdWz; }
 
     struct WallTrough {
         int leftIdx;
@@ -124,7 +127,13 @@ private:
 
     bool leftWallDetected();
 
+    // ── Last commanded drive values (updated by fsmUpdate callers of drive()) ──
+    int           lastCmdVx;
+    int           lastCmdVy;
+    int           lastCmdWz;
+
     // ── FSM phases ────────────────────────────────────────────────────────────
     void doHoming();
     void doRun();
+    inline void drive(int vx, int vy, int wz);
 };

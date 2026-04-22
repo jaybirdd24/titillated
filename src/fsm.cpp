@@ -79,11 +79,18 @@ fsm::fsm(percepetion *perception, movement *motors)
       leftWallSeen(false), leftNonIgnoreCount(0),
       leftIgnoreCount(0), leftLastCountedMs(0),
       firstRun(true),
-      runCount(1)
+      runCount(1),
+      lastCmdVx(0), lastCmdVy(0), lastCmdWz(0)
 {
 }
 
 fsm::~fsm() {}
+
+// Records vx/vy/wz for telemetry then forwards to motors — movement.cpp untouched
+inline void fsm::drive(int vx, int vy, int wz) {
+    lastCmdVx = vx; lastCmdVy = vy; lastCmdWz = wz;
+    motors->drive(vx, vy, wz);
+}
 
 // ── Heading ───────────────────────────────────────────────────────────────────
 
@@ -557,6 +564,7 @@ void fsm::doRun() {
             motors->Stop(true);
             motors->setTargetHeading(runHeading);
             runCount++;
+            if (runCount == 9) motors->resetWallFollow();
             Serial.print("Strafe done — move up (run ");
             Serial.print(runCount);
             Serial.println(")");
@@ -601,6 +609,7 @@ void fsm::doRun() {
             motors->Stop(true);
             motors->setTargetHeading(runHeading);
             runCount++;
+            if (runCount == 9) motors->resetWallFollow();
             Serial.print("Strafe done — move down (run ");
             Serial.print(runCount);
             Serial.println(")");
