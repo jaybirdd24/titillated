@@ -3,6 +3,12 @@
 #include <Servo.h>
 #include "percepetion.h"
 
+enum WallSensor {
+    WALL_IR_RIGHT = 0,  // IR medium right
+    WALL_IR_LEFT,       // IR long left
+    WALL_US_RIGHT       // Ultrasonic (right-facing)
+};
+
 class movement
 {
     private:
@@ -61,8 +67,7 @@ class movement
         void latchHeading();
 
         // Returns vy correction to maintain setpoint_mm distance from wall
-        // followLeft=true uses IR long left sensor (for left wall), false uses IR med right
-        float wallFollowCorrection(float setpoint_mm, bool followLeft = false);
+        float wallFollowCorrection(float setpoint_mm, WallSensor sensor = WALL_IR_RIGHT);
 
         // Mecanum IK: vx=forward, vy=strafe(+left), wz=rotation correction
         void drive(int vx, int vy, int wz);
@@ -90,4 +95,6 @@ class movement
 
         // Reset wall-follow PID state; call before starting a new wall-follow run
         void resetWallFollow();
+
+        void setMotorSpeedsRaw(int lf, int lr, int rr, int rf); // no slew limiting, for testing
 };

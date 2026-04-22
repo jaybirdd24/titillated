@@ -6,8 +6,11 @@
 enum RobotState {
     // ── Homing ────────────────────────────────────────────────────────────────
     HOMING_IDLE = 0,
-    HOMING_SCAN,            // spin 360°, record top-N closest US readings
-    HOMING_RETURN,          // rotate CW back to averaged closest heading
+    HOMING_SCAN_ROTATE,     // step-scan: rotate CCW to next 10° increment
+    HOMING_SCAN_SETTLE,     // step-scan: wait for vibration to damp
+    HOMING_SCAN_SAMPLE,     // step-scan: collect US readings at this angle
+    HOMING_SCAN_PROCESS,    // step-scan: cluster analysis, pick wall-normal heading
+    HOMING_SCAN_REFINE,     // step-scan: dither ±delta, fine-tune bestHeading
     HOMING_APPROACH_WALL,   // move right until US < 15 cm
     HOMING_APPROACH_FWD,    // move forward until front IR < 150 mm
     HOMING_RAM_WALL,        // drive into right wall to physically square up
@@ -43,23 +46,28 @@ private:
     unsigned long lastUpdateUs;
     void          updateHeading();
 
-    // ── Homing state ─────────────────────────────────────────────────────────
-    static const int TOP_N = 10;
-    float  topDist[TOP_N];
-    float  topHead[TOP_N];
-    int    topCount;
-    float  minUsDist;
-    float  minUsHeading;
-    float  lastValidUs;
-    int    usReadingCount;
-    unsigned long lastSampleMs;
-    float  returnStartHeading;
-    long   returnExtraStart;
-    unsigned long lastSampleUsMs;
+    // ── Step-scan state ───────────────────────────────────────────────────────
+    static const int SCAN_STEPS_MAX = 36;   // 10 ° resolution → 360 / 10 = 36 steps
+    float         scanRange[SCAN_STEPS_MAX]; // mean US range (cm) per step; -1 = invalid
+    int           scanStep;                  // current step index
+    int           scanSampleCount;           // valid samples collected at this step
+    float         scanSampleSum;             // running sum for averaging
+    float         scanLastValid;             // for per-step spike rejection
+    unsigned long scanSettleStart;           // when we stopped rotating (settle timer)
+    unsigned long scanSampleLast;            // last time a US sample was taken
 
-    void insertTopN(float dist, float head);
-    float avgTopHeading();
-    float avgTopDist();
+    // Result of HOMING_SCAN_PROCESS
+    float         bestHeading;               // chosen wall-normal heading (degrees)
+    float         bestRange;                 // mean US range at bestHeading (cm)
+
+    // Refine sub-state (HOMING_SCAN_REFINE)
+    int           refinePhase;
+    float         refineLeft;                // range at bestHeading - REFINE_DELTA
+    float         refineRight;               // range at bestHeading + REFINE_DELTA
+    int           refineIter;
+    unsigned long refineSettleStart;
+    int           refineSampleCount;
+    float         refineSampleSum;
 
     // ── Square-up state ───────────────────────────────────────────────────────
     long          squareInRangeStart;

@@ -43,9 +43,11 @@ bool percepetion::init()
     pinMode(PIN_BATTERY, INPUT);
 
     // ── IMU (BNO08x over I2C) ────────────────────────────────────
-    if (!bno08x.begin_I2C()) return false;
-    if (!bno08x.enableReport(SH2_GYROSCOPE_UNCALIBRATED, 10000))
-        return false;
+    if (!bno08x.begin_I2C()) {
+        // IMU not connected, but continue anyway
+    } else if (!bno08x.enableReport(SH2_GYROSCOPE_UNCALIBRATED, 10000)) {
+        // Failed to enable gyro report, but continue
+    }
 
     // Seed EMA filters with first reading so they start at a real value
     irMedFrontFiltered = (float)analogRead(PIN_IR_MED_FRONT);

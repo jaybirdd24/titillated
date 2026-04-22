@@ -4,10 +4,24 @@
 
 // ── Tuning ────────────────────────────────────────────────────────────────────
 static const int   ROTATE_SPEED       = 150;
-static const float US_SPIKE_THRESHOLD = 60000.0f;
-static const int   US_WARMUP_READINGS = 5;
-static const float RETURN_MIN_DEG     = 20.0f;
-static const int   RETURN_EXTRA_MS    = 100;
+
+// ── Step-scan tuning ──────────────────────────────────────────────────────────
+static const int   SCAN_STEP_DEG      = 10;      // degrees per scan step
+static const int   SCAN_N_SAMPLES     = 6;       // US readings per step
+static const int   SCAN_SETTLE_MS     = 80;      // ms to wait after stopping before sampling
+static const int   SCAN_INTERVAL_MS   = 40;      // ms between US readings within a step
+static const float SCAN_SPIKE_CM      = 25.0f;   // reject if jump > this from last valid
+static const int   SCAN_ROTATE_SPEED  = 100;     // slower rotation for heading accuracy
+static const float FLAT_MIN_RANGE_CM  = 3.0f;    // ignore readings below this (spurious close)
+static const float FLAT_MAX_RANGE_CM  = 200.0f;  // ignore readings above this (out of range)
+static const float FLAT_SLOPE_THR     = 6.0f;    // cm — slope threshold for flat cluster
+static const float RECT_SPACING_TOL   = 20.0f;   // degrees tolerance for 90° rectangle check
+
+// ── Refine tuning ─────────────────────────────────────────────────────────────
+static const float REFINE_DELTA_DEG   = 10.0f;   // dither ±this many degrees from bestHeading
+static const float REFINE_EPS_CM      = 1.5f;    // converged when |dL - dR| < this
+static const int   REFINE_MAX_ITER    = 5;        // max dither iterations
+static const float REFINE_ADJ_DEG     = 3.0f;    // heading shift per iteration
 
 
 static const float APPROACH_STOP_CM   = 15.0f;//change this for better score
@@ -28,7 +42,7 @@ static const float FRONT_STOP_MM      = 100.0f;///and this one
 static const float LEFT_IGNORE_MM     = 110.0f;
 static const int   LEFT_CONFIRM_N     = 20;
 static const int   LEFT_RESET_N       = 10;
-static const unsigned long STRAFE_TIME_MS = 693;//tune the strafe time between cuts
+static const unsigned long STRAFE_TIME_MS = 592;//tune the strafe time between cuts
 static const float STRAFE_DECEL_KP       =   3.0f; // ramp down strafe speed near target
 static const float STRAFE_MIN_SPEED      =  60.0f;  // don't go slower than this during strafe
 
@@ -55,9 +69,12 @@ fsm::fsm(percepetion *perception, movement *motors)
     : perception(perception), motors(motors),
       state(HOMING_IDLE),
       heading(0.0f), lastUpdateUs(0),
-      topCount(0), minUsDist(9999.0f), minUsHeading(0.0f),
-      lastValidUs(-1.0f), usReadingCount(0), lastSampleMs(0),
-      returnStartHeading(0.0f), returnExtraStart(-1), lastSampleUsMs(0),
+      scanStep(0), scanSampleCount(0), scanSampleSum(0.0f),
+      scanLastValid(-1.0f), scanSettleStart(0), scanSampleLast(0),
+      bestHeading(-1.0f), bestRange(9999.0f),
+      refinePhase(0), refineLeft(0.0f), refineRight(0.0f),
+      refineIter(0), refineSettleStart(0),
+      refineSampleCount(0), refineSampleSum(0.0f),
       squareInRangeStart(-1), squareLastPrintMs(0), squareUsSmoothed(-1.0f),
       squareIntegral(0.0f), squarePrevError(0.0f), squareLastUs(0),
       ramStartMs(0), backOffInRangeStart(-1),
@@ -68,49 +85,18 @@ fsm::fsm(percepetion *perception, movement *motors)
       firstRun(true),
       runCount(1)
 {
+    for (int i = 0; i < SCAN_STEPS_MAX; i++) scanRange[i] = -1.0f;
 }
 
 fsm::~fsm() {}
 
-// ── Heading ───────────────────────────────────────────────────────────────────
+// ── Heading (FSM-local integrator, kept for doRun heading display) ────────────
 
 void fsm::updateHeading() {
     unsigned long now = micros();
     float dt = (now - lastUpdateUs) / 1e6f;
     lastUpdateUs = now;
     heading += perception->getGyroZ() * (180.0f / PI) * dt;
-}
-
-// ── Top-N helpers ─────────────────────────────────────────────────────────────
-
-void fsm::insertTopN(float dist, float head) {
-    if (topCount < TOP_N) {
-        topDist[topCount] = dist;
-        topHead[topCount] = head;
-        topCount++;
-    } else {
-        int worst = 0;
-        for (int i = 1; i < TOP_N; i++)
-            if (topDist[i] > topDist[worst]) worst = i;
-        if (dist < topDist[worst]) {
-            topDist[worst] = dist;
-            topHead[worst] = head;
-        }
-    }
-}
-
-float fsm::avgTopHeading() {
-    if (topCount == 0) return 0.0f;
-    float sum = 0.0f;
-    for (int i = 0; i < topCount; i++) sum += topHead[i];
-    return sum / topCount;
-}
-
-float fsm::avgTopDist() {
-    if (topCount == 0) return 9999.0f;
-    float sum = 0.0f;
-    for (int i = 0; i < topCount; i++) sum += topDist[i];
-    return sum / topCount;
 }
 
 // ── Left wall detection ───────────────────────────────────────────────────────
@@ -177,68 +163,362 @@ void fsm::doHoming() {
     switch (state) {
 
     case HOMING_IDLE:
-        heading        = 0.0f;
-        minUsDist      = 9999.0f;
-        minUsHeading   = 0.0f;
-        lastValidUs    = -1.0f;
-        usReadingCount = 0;
-        topCount       = 0;
-        lastUpdateUs   = micros();
-        state          = HOMING_SCAN;
+        motors->resetHeading();
+        for (int i = 0; i < SCAN_STEPS_MAX; i++) scanRange[i] = -1.0f;
+        scanStep        = 0;
+        scanSampleCount = 0;
+        scanSampleSum   = 0.0f;
+        scanLastValid   = -1.0f;
+        bestHeading     = -1.0f;
+        bestRange       = 9999.0f;
+        state           = HOMING_SCAN_ROTATE;
         break;
 
-    case HOMING_SCAN:
-        updateHeading();
+    case HOMING_SCAN_ROTATE:
+        {
+            float target = scanStep * (float)SCAN_STEP_DEG;
+            if (motors->getHeading() >= target - 2.0f) {
+                motors->Stop(true);
+                scanSettleStart = millis();
+                scanSampleCount = 0;
+                scanSampleSum   = 0.0f;
+                scanLastValid   = -1.0f;
+                scanSampleLast  = millis();
+                state = HOMING_SCAN_SETTLE;
+            } else {
+                motors->RotateCCW(SCAN_ROTATE_SPEED);
+            }
+        }
+        break;
+
+    case HOMING_SCAN_SETTLE:
+        if (millis() - scanSettleStart >= (unsigned long)SCAN_SETTLE_MS) {
+            state = HOMING_SCAN_SAMPLE;
+        }
+        break;
+
+    case HOMING_SCAN_SAMPLE:
         {
             unsigned long now = millis();
-            if (now - lastSampleMs >= 100) {
-                lastSampleMs = now;
-                float usDist = perception->getUltrasonicCm();
-                usReadingCount++;
-                bool valid = (usReadingCount > US_WARMUP_READINGS) &&
-                             (usDist > 0.0f) &&
-                             (lastValidUs < 0.0f || fabsf(usDist - lastValidUs) <= US_SPIKE_THRESHOLD);
-                if (valid) {
-                    lastValidUs = usDist;
-                    insertTopN(usDist, heading);
-                    if (usDist < minUsDist) minUsDist = usDist;
+            if (now - scanSampleLast >= (unsigned long)SCAN_INTERVAL_MS) {
+                scanSampleLast = now;
+                float r = perception->getUltrasonicCm();
+                bool ok = (r > FLAT_MIN_RANGE_CM) && (r < FLAT_MAX_RANGE_CM) &&
+                          (scanLastValid < 0.0f || fabsf(r - scanLastValid) < SCAN_SPIKE_CM);
+                if (ok) {
+                    scanSampleSum += r;
+                    scanSampleCount++;
+                    scanLastValid = r;
                 }
             }
-        }
-        motors->RotateCCW(ROTATE_SPEED);
-        if (heading >= 360.0f) {
-            motors->Stop(true);
-            lastUpdateUs      = micros();
-            returnStartHeading = heading;
-            returnExtraStart  = -1;
-            minUsHeading      = avgTopHeading();
-            Serial.print("Scan done. Avg dist=");
-            Serial.print(avgTopDist(), 1);
-            Serial.print(" heading=");
-            Serial.println(minUsHeading, 1);
-            state = HOMING_RETURN;
+            // advance when enough valid samples or timeout (2× budget)
+            unsigned long budget = (unsigned long)(SCAN_SETTLE_MS + SCAN_N_SAMPLES * SCAN_INTERVAL_MS * 2);
+            if (scanSampleCount >= SCAN_N_SAMPLES || millis() - scanSettleStart >= budget) {
+                scanRange[scanStep] = (scanSampleCount > 0)
+                    ? scanSampleSum / scanSampleCount
+                    : -1.0f;
+                scanStep++;
+                if (scanStep >= SCAN_STEPS_MAX) {
+                    motors->Stop(true);
+                    state = HOMING_SCAN_PROCESS;
+                } else {
+                    scanSampleCount = 0;
+                    scanSampleSum   = 0.0f;
+                    scanLastValid   = -1.0f;
+                    state = HOMING_SCAN_ROTATE;
+                }
+            }
         }
         break;
 
-    case HOMING_RETURN:
-        updateHeading();
+    case HOMING_SCAN_PROCESS:
         {
-            float rotated = returnStartHeading - heading;
-            float usDist  = perception->getUltrasonicCm();
-            if (rotated >= RETURN_MIN_DEG && usDist > 0.0f && usDist <= minUsDist + 2.0f) {
-                if (returnExtraStart < 0) returnExtraStart = millis();
-                if (millis() - (unsigned long)returnExtraStart >= (unsigned long)RETURN_EXTRA_MS) {
-                    motors->Stop(true);
-                    Serial.println("Facing wall — moving right");
-                    state = HOMING_APPROACH_WALL;
-                } else {
-                    motors->RotateCW(ROTATE_SPEED);
-                }
-            } else {
-                motors->RotateCW(ROTATE_SPEED);
+            const int N = SCAN_STEPS_MAX;
+
+            // 1. 3-point wrap-around moving average
+            float smoothed[N];
+            for (int i = 0; i < N; i++) {
+                float r = scanRange[i];
+                if (r < 0.0f) { smoothed[i] = -1.0f; continue; }
+                int ip = (i - 1 + N) % N, in_ = (i + 1) % N;
+                float rp = (scanRange[ip] > 0.0f) ? scanRange[ip] : r;
+                float rn = (scanRange[in_] > 0.0f) ? scanRange[in_] : r;
+                smoothed[i] = (rp + r + rn) / 3.0f;
             }
+
+            // 2. Local slope S[i] = |smoothed[i+1] - smoothed[i-1]| (wrap-around)
+            float slope[N];
+            for (int i = 0; i < N; i++) {
+                if (smoothed[i] < 0.0f) { slope[i] = 9999.0f; continue; }
+                int ip = (i - 1 + N) % N, in_ = (i + 1) % N;
+                float sp = (smoothed[ip] >= 0.0f) ? smoothed[ip] : smoothed[i];
+                float sn = (smoothed[in_] >= 0.0f) ? smoothed[in_] : smoothed[i];
+                slope[i] = fabsf(sn - sp);
+            }
+
+            // 3. Find contiguous low-slope clusters; track start/end for seam merge
+            struct ClusterData {
+                float headingCentre, rangeMean, slopeMean;
+                int   widthSteps, startStep, endStep;
+            };
+            const int MAX_CL = 8;
+            ClusterData cl[MAX_CL];
+            int nCl = 0;
+
+            bool  inCluster = false;
+            float clSumH = 0.0f, clSumR = 0.0f, clSumS = 0.0f;
+            int   clCnt = 0, clStart = 0;
+
+            for (int i = 0; i <= N; i++) {
+                bool flat = (i < N) && (slope[i] < FLAT_SLOPE_THR) && (smoothed[i] > 0.0f);
+                if (flat) {
+                    if (!inCluster) { inCluster = true; clStart = i; }
+                    clSumH += i * (float)SCAN_STEP_DEG;
+                    clSumR += smoothed[i];
+                    clSumS += slope[i];
+                    clCnt++;
+                } else if (inCluster) {
+                    inCluster = false;
+                    if (nCl < MAX_CL) {
+                        cl[nCl].headingCentre = clSumH / clCnt;
+                        cl[nCl].rangeMean     = clSumR / clCnt;
+                        cl[nCl].slopeMean     = clSumS / clCnt;
+                        cl[nCl].widthSteps    = clCnt;
+                        cl[nCl].startStep     = clStart;
+                        cl[nCl].endStep       = i - 1;
+                        nCl++;
+                    }
+                    clSumH = clSumR = clSumS = 0.0f;
+                    clCnt = 0;
+                }
+            }
+
+            // 4. Merge first and last cluster if they straddle the 0°/360° seam
+            if (nCl >= 2 && cl[0].startStep == 0 && cl[nCl - 1].endStep == N - 1) {
+                float wA = (float)cl[0].widthSteps;
+                float wB = (float)cl[nCl - 1].widthSteps;
+                float total = wA + wB;
+                // Wrap last cluster's centre below 0° so the weighted mean is correct
+                float hB = cl[nCl - 1].headingCentre - 360.0f;
+                float merged = (cl[0].headingCentre * wA + hB * wB) / total;
+                if (merged < 0.0f) merged += 360.0f;
+                cl[0].headingCentre = merged;
+                cl[0].rangeMean     = (cl[0].rangeMean * wA + cl[nCl - 1].rangeMean * wB) / total;
+                cl[0].slopeMean     = (cl[0].slopeMean * wA + cl[nCl - 1].slopeMean * wB) / total;
+                cl[0].widthSteps    = (int)total;
+                nCl--;
+                Serial.println("  seam merge applied");
+            }
+
+            Serial.print("Scan: "); Serial.print(nCl); Serial.println(" clusters");
+            for (int i = 0; i < nCl; i++) {
+                Serial.print("  cl["); Serial.print(i); Serial.print("] h=");
+                Serial.print(cl[i].headingCentre, 1);
+                Serial.print(" r="); Serial.print(cl[i].rangeMean, 1);
+                Serial.print(" w="); Serial.print(cl[i].widthSteps);
+                Serial.print(" s="); Serial.println(cl[i].slopeMean, 2);
+            }
+
+            // 5. Cluster score: lower = better (closer wall + wider flat region)
+            //    score = rangeMean / widthSteps
+            bestHeading    = -1.0f;
+            bestRange      = 9999.0f;
+            float bestScore = 9999.0f;
+
+            // 5a. Rectangle geometry: prefer a 90°-spaced pair
+            for (int a = 0; a < nCl; a++) {
+                for (int b = a + 1; b < nCl; b++) {
+                    float sp = fabsf(cl[b].headingCentre - cl[a].headingCentre);
+                    if (sp > 180.0f) sp = 360.0f - sp;
+                    if (fabsf(sp - 90.0f) <= RECT_SPACING_TOL) {
+                        float sA = cl[a].rangeMean / cl[a].widthSteps;
+                        float sB = cl[b].rangeMean / cl[b].widthSteps;
+                        int   pick = (sA <= sB) ? a : b;
+                        float s    = (sA <= sB) ? sA : sB;
+                        if (s < bestScore) {
+                            bestScore   = s;
+                            bestRange   = cl[pick].rangeMean;
+                            bestHeading = cl[pick].headingCentre;
+                        }
+                    }
+                }
+            }
+
+            // 5b. Fallback: best-scoring flat cluster (no 90° pair found)
+            if (bestHeading < 0.0f) {
+                for (int a = 0; a < nCl; a++) {
+                    float s = cl[a].rangeMean / cl[a].widthSteps;
+                    if (s < bestScore) {
+                        bestScore   = s;
+                        bestRange   = cl[a].rangeMean;
+                        bestHeading = cl[a].headingCentre;
+                    }
+                }
+            }
+
+            // 5c. Final fallback: raw minimum smoothed reading
+            if (bestHeading < 0.0f) {
+                for (int i = 0; i < N; i++) {
+                    if (smoothed[i] > 0.0f && smoothed[i] < bestRange) {
+                        bestRange   = smoothed[i];
+                        bestHeading = i * (float)SCAN_STEP_DEG;
+                    }
+                }
+            }
+
+            Serial.print("Best h="); Serial.print(bestHeading, 1);
+            Serial.print(" r="); Serial.println(bestRange, 1);
+
+            refinePhase       = 0;
+            refineIter        = 0;
+            refineSampleCount = 0;
+            refineSampleSum   = 0.0f;
+            state = HOMING_APPROACH_WALL;
         }
         break;
+
+    // case HOMING_SCAN_REFINE:
+    //     {
+    //         unsigned long now = millis();
+    //         float curH = motors->getHeading();
+    //         // Maximum time we're willing to wait for SCAN_N_SAMPLES valid readings
+    //         static const unsigned long REFINE_SAMPLE_BUDGET_MS =
+    //             (unsigned long)(SCAN_N_SAMPLES * SCAN_INTERVAL_MS * 3);
+
+    //         if (refinePhase == 0) {
+    //             // Rotate CW from ~360° to (bestHeading - REFINE_DELTA)
+    //             // Heading is a continuous integrator; this works even when target goes negative
+    //             float tgt = bestHeading - REFINE_DELTA_DEG;
+    //             if (curH <= tgt + 3.0f) {
+    //                 motors->Stop(true);
+    //                 refineSettleStart = now;
+    //                 refinePhase = 1;
+    //             } else {
+    //                 motors->RotateCW(ROTATE_SPEED);
+    //             }
+
+    //         } else if (refinePhase == 1) {
+    //             // Settle after stopping at -delta position
+    //             if (now - refineSettleStart >= (unsigned long)SCAN_SETTLE_MS) {
+    //                 refineSampleCount = 0;
+    //                 refineSampleSum   = 0.0f;
+    //                 scanLastValid     = -1.0f;
+    //                 scanSampleLast    = now;
+    //                 refineSettleStart = now; // reused as sample-budget start
+    //                 refinePhase = 2;
+    //             }
+
+    //         } else if (refinePhase == 2) {
+    //             // Sample → refineLeft  (range at bestHeading − REFINE_DELTA)
+    //             if (now - scanSampleLast >= (unsigned long)SCAN_INTERVAL_MS) {
+    //                 scanSampleLast = now;
+    //                 float r = perception->getUltrasonicCm();
+    //                 bool ok = (r > FLAT_MIN_RANGE_CM) && (r < FLAT_MAX_RANGE_CM) &&
+    //                           (scanLastValid < 0.0f || fabsf(r - scanLastValid) < SCAN_SPIKE_CM);
+    //                 if (ok) { refineSampleSum += r; refineSampleCount++; scanLastValid = r; }
+    //             }
+    //             bool done = (refineSampleCount >= SCAN_N_SAMPLES) ||
+    //                         (now - refineSettleStart >= REFINE_SAMPLE_BUDGET_MS);
+    //             if (done) {
+    //                 // Use partial mean on timeout; fall back to scan estimate if no valid reads
+    //                 refineLeft        = (refineSampleCount > 0)
+    //                                     ? refineSampleSum / refineSampleCount
+    //                                     : bestRange;
+    //                 refineSampleCount = 0;
+    //                 refineSampleSum   = 0.0f;
+    //                 scanLastValid     = -1.0f;
+    //                 refinePhase = 3;
+    //             }
+
+    //         } else if (refinePhase == 3) {
+    //             // Rotate CCW to (bestHeading + REFINE_DELTA)
+    //             float tgt = bestHeading + REFINE_DELTA_DEG;
+    //             if (curH >= tgt - 3.0f) {
+    //                 motors->Stop(true);
+    //                 refineSettleStart = now;
+    //                 refinePhase = 4;
+    //             } else {
+    //                 motors->RotateCCW(SCAN_ROTATE_SPEED);
+    //             }
+
+    //         } else if (refinePhase == 4) {
+    //             // Settle after stopping at +delta position
+    //             if (now - refineSettleStart >= (unsigned long)SCAN_SETTLE_MS) {
+    //                 refineSampleCount = 0;
+    //                 refineSampleSum   = 0.0f;
+    //                 scanLastValid     = -1.0f;
+    //                 scanSampleLast    = now;
+    //                 refineSettleStart = now;
+    //                 refinePhase = 5;
+    //             }
+
+    //         } else if (refinePhase == 5) {
+    //             // Sample → refineRight  (range at bestHeading + REFINE_DELTA)
+    //             if (now - scanSampleLast >= (unsigned long)SCAN_INTERVAL_MS) {
+    //                 scanSampleLast = now;
+    //                 float r = perception->getUltrasonicCm();
+    //                 bool ok = (r > FLAT_MIN_RANGE_CM) && (r < FLAT_MAX_RANGE_CM) &&
+    //                           (scanLastValid < 0.0f || fabsf(r - scanLastValid) < SCAN_SPIKE_CM);
+    //                 if (ok) { refineSampleSum += r; refineSampleCount++; scanLastValid = r; }
+    //             }
+    //             bool done = (refineSampleCount >= SCAN_N_SAMPLES) ||
+    //                         (now - refineSettleStart >= REFINE_SAMPLE_BUDGET_MS);
+    //             if (done) {
+    //                 refineRight = (refineSampleCount > 0)
+    //                               ? refineSampleSum / refineSampleCount
+    //                               : bestRange;
+    //                 refinePhase = 6;
+    //             }
+
+    //         } else if (refinePhase == 6) {
+    //             // e = refineLeft − refineRight
+    //             // Convention (US sensor on the RIGHT, RotateCCW increases heading):
+    //             //   refineLeft  = range at (bestHeading − delta) — slightly CW of best
+    //             //   refineRight = range at (bestHeading + delta) — slightly CCW of best
+    //             // Minimum range = perpendicular to wall.
+    //             // e > 0  →  right side closer  →  perp is CCW of current best  →  bestHeading += adj
+    //             // e < 0  →  left side closer   →  perp is CW  of current best  →  bestHeading -= adj
+    //             //
+    //             // Lab check: place robot ~5° off perpendicular from a flat wall, run homing,
+    //             // watch Serial output. Each iteration bestHeading should step toward the wall
+    //             // normal. If it steps away, negate the adj below.
+    //             float e = refineLeft - refineRight;
+    //             Serial.print("Refine "); Serial.print(refineIter);
+    //             Serial.print(" L="); Serial.print(refineLeft, 1);
+    //             Serial.print(" R="); Serial.print(refineRight, 1);
+    //             Serial.print(" e="); Serial.println(e, 2);
+
+    //             bool converged = (fabsf(e) < REFINE_EPS_CM) || (refineIter >= REFINE_MAX_ITER - 1);
+    //             if (!converged) {
+    //                 bestHeading += (e > 0.0f) ? REFINE_ADJ_DEG : -REFINE_ADJ_DEG;
+    //                 refineIter++;
+    //                 refineSampleCount = 0;
+    //                 refineSampleSum   = 0.0f;
+    //                 refinePhase = 0;
+    //             } else {
+    //                 refinePhase = 7;
+    //             }
+
+    //         } else if (refinePhase == 7) {
+    //             // Rotate CW to final bestHeading
+    //             if (curH <= bestHeading + 3.0f) {
+    //                 motors->Stop(true);
+    //                 refineSettleStart = now;
+    //                 refinePhase = 8;
+    //             } else {
+    //                 motors->RotateCW(ROTATE_SPEED);
+    //             }
+
+    //         } else { // refinePhase == 8
+    //             if (now - refineSettleStart >= (unsigned long)SCAN_SETTLE_MS) {
+    //                 Serial.print("Aligned h=");
+    //                 Serial.print(motors->getHeading(), 1);
+    //                 Serial.println(" — approaching wall");
+    //                 state = HOMING_APPROACH_WALL;
+    //             }
+    //         }
+    //     }
+    //     break;
 
     case HOMING_APPROACH_WALL:
         {
@@ -413,7 +693,7 @@ void fsm::doRun() {
                 Serial.println("DONE");
                 state = STATE_DONE;
             } else {
-                int vy = (int)motors->wallFollowCorrection(93.0f, true);
+                int vy = (int)motors->wallFollowCorrection(93.0f, WALL_IR_LEFT);
                 motors->drive(-MOVE_SPEED, vy, (int)motors->headingCorrection());
             }
         }
@@ -427,7 +707,7 @@ void fsm::doRun() {
                 Serial.println("DONE");
                 state = STATE_DONE;
             } else {
-                int vy = (int)motors->wallFollowCorrection(93.0f, true);
+                int vy = (int)motors->wallFollowCorrection(93.0f, WALL_IR_LEFT);
                 motors->drive(MOVE_SPEED, vy, (int)motors->headingCorrection());
             }
         }

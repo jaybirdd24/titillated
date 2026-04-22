@@ -132,7 +132,7 @@ void movement::drive(int vx, int vy, int wz)
                    -vx - vy + wz);  // RF
 }
 
-float movement::wallFollowCorrection(float setpoint_mm, bool followLeft)
+float movement::wallFollowCorrection(float setpoint_mm, WallSensor sensor)
 {
     unsigned long now = micros();
     float dt = (now - last_wall_us) / 1e6f;
@@ -140,12 +140,26 @@ float movement::wallFollowCorrection(float setpoint_mm, bool followLeft)
 
     if (dt > 0.1f) dt = 0.1f;
 
-    float measured = followLeft ? perception->getIRLongLeft()
-                                : perception->getIRMedRight();
-    // Right wall: positive error → too far → strafe left
-    // Left wall:  positive error → too close → strafe right (sign flipped)
-    float error = followLeft ? (measured - setpoint_mm)
-                             : (-measured + setpoint_mm);
+    float measured;
+    float error;
+    switch (sensor) {
+        case WALL_IR_LEFT:
+            measured = perception->getIRLongLeft();
+            error = measured - setpoint_mm;   // left wall: too close → strafe right
+            break;
+        case WALL_US_RIGHT: {
+            float us_cm = perception->getUltrasonicCm();
+            if (us_cm <= 0.0f) return 0.0f;   // invalid US — skip this tick
+            measured = us_cm * 10.0f;
+            error = -measured + setpoint_mm;  // right wall: too far → strafe left
+            break;
+        }
+        case WALL_IR_RIGHT:
+        default:
+            measured = perception->getIRMedRight();
+            error = -measured + setpoint_mm;
+            break;
+    }
 
     integral_vy += error * dt;
     integral_vy = constrain(integral_vy, -MAX_INTEGRAL_VY, MAX_INTEGRAL_VY);
@@ -153,9 +167,6 @@ float movement::wallFollowCorrection(float setpoint_mm, bool followLeft)
     float raw_deriv = (error - prev_error_vy) / dt;
     filtered_derivative_vy = 0.7f * filtered_derivative_vy + 0.3f * raw_deriv;
     prev_error_vy = error;
-
-
-
 
     return KP_VY * error + KI_VY * integral_vy + KD_VY * filtered_derivative_vy;
 }
@@ -186,7 +197,7 @@ void movement::RotateCW(int speed)
     float dt = (now - last_update_us) / 1e6f;
     last_update_us = now;
     heading += perception->getGyroZ() * (180.0f / PI) * dt;
-    setMotorSpeeds(speed, speed, speed, speed);
+    setMotorSpeedsRaw(speed, speed, speed, speed);
 }
 
 void movement::RotateCCW(int speed)
@@ -195,7 +206,7 @@ void movement::RotateCCW(int speed)
     float dt = (now - last_update_us) / 1e6f;
     last_update_us = now;
     heading += perception->getGyroZ() * (180.0f / PI) * dt;
-    setMotorSpeeds(-speed, -speed, -speed, -speed);
+    setMotorSpeedsRaw(-speed, -speed, -speed, -speed);
 }
 
 void movement::resetHeading()
@@ -228,4 +239,25 @@ void movement::Stop(bool immediate)
         setMotorSpeeds(0, 0, 0, 0);
     }
     latchHeading();
+}
+
+
+void movement::setMotorSpeedsRaw(int lf, int lr, int rr, int rf)
+{
+    lf = constrain(lf, -1000, 1000);
+    lr = constrain(lr, -1000, 1000);
+    rr = constrain(rr, -1000, 1000);
+    rf = constrain(rf, -1000, 1000);
+
+    current_speeds[0] = lf;
+    current_speeds[1] = lr;
+    current_speeds[2] = rr;
+    current_speeds[3] = rf;
+
+    left_front_motor.writeMicroseconds(PWM_NEUTRAL + lf);
+    left_rear_motor.writeMicroseconds(PWM_NEUTRAL + lr);
+    right_rear_motor.writeMicroseconds(PWM_NEUTRAL + rr);
+    right_front_motor.writeMicroseconds(PWM_NEUTRAL + rf);
+
+    last_slew_us = micros();
 }
