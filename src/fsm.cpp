@@ -12,11 +12,12 @@ static const float TROUGH_BAND_CM         = 1.5f;     // distance above min that
 static const int   MIN_TROUGH_SAMPLES     = 3;
 const float OPPOSITE_TOL_DEG = 20.0f;
 
-static const int   RETURN_SPIN_FAST       = 110;
-static const int   RETURN_SPIN_SLOW       = 90;
+static const int   RETURN_SPIN_FAST       = 130;
+static const int   RETURN_SPIN_SLOW       = 110;
 static const float RETURN_SLOW_BAND_DEG   = 10.0f;
 static const float RETURN_STOP_TOL_DEG    = 2.0f;
 static const unsigned long RETURN_STABLE_MS = 250;
+static const float TARGET_HEADING_OFFSET_DEG = -5.0f;  // overshoot compensation
 
 
 static const float APPROACH_STOP_CM   = 15.0f;//change this for better score
@@ -37,20 +38,21 @@ static const float FRONT_STOP_MM      = 100.0f;///and this one
 static const float LEFT_IGNORE_MM     = 110.0f;
 static const int   LEFT_CONFIRM_N     = 20;
 static const int   LEFT_RESET_N       = 10;
-static const unsigned long STRAFE_TIME_MS = 525;//tune the strafe time between cuts
+static const unsigned long STRAFE_TIME_MS = 479;//tune the strafe time between cuts
 static const float STRAFE_DECEL_KP       =   3.0f; // ramp down strafe speed near target
 static const float STRAFE_MIN_SPEED      =  60.0f;  // don't go slower than this during strafe
 
 static const int   RAM_SPEED              = 200;     // speed to drive into wall
 static const unsigned long RAM_TIME_MS    = 1500;    // how long to press against wall
-static const float BACK_OFF_TARGET_MM     = 86.0f;   // IR med right target after backing off
+static const float BACK_OFF_TARGET_MM     = 100.0f;   // IR med right target after backing off
 static const float BACK_OFF_TOLERANCE_MM  = 9.0f;    // close enough
 static const float BACK_OFF_KP            = 9.5f;
 static const float BACK_OFF_MAX_SPEED     = 120.0f;
 static const float BACK_OFF_MIN_SPEED     = 40.0f;
 static const unsigned long BACK_OFF_HOLD_MS = 250;   // hold in range before starting run
+static const unsigned long MOVE_RAMP_TIME_MS = 200;  // ramp-up duration at start of run
 
-static const float WF_SETPOINT_CM = 9.5f;//and this one
+static const float WF_SETPOINT_CM = 9.35f;//and this one
 static const float WF_TOLERANCE_CM  = 1.0f;
 
 static const float WF_KP          = 30.0f;
@@ -72,9 +74,9 @@ fsm::fsm(percepetion *perception, movement *motors)
       lastSampleMs(0),
       squareInRangeStart(-1), squareLastPrintMs(0), squareUsSmoothed(-1.0f),
       squareIntegral(0.0f), squarePrevError(0.0f), squareLastUs(0),
-      ramStartMs(0), backOffInRangeStart(-1),
+      ramStartMs(0), settleStartMs(0), backOffInRangeStart(-1),
       wf_integral(0.0f), wf_last_us(0),
-      strafeStartMs(0), runHeading(0.0f), runWfSetpoint(0.0f),
+      strafeStartMs(0), runMoveDownStartMs(0), runHeading(0.0f), runWfSetpoint(0.0f),
       leftWallSeen(false), leftNonIgnoreCount(0),
       leftIgnoreCount(0), leftLastCountedMs(0),
       firstRun(true),
@@ -403,7 +405,7 @@ void fsm::doHoming() {
         break;
     }
 
-    scanTargetHeading = targetHeading;
+    scanTargetHeading = wrap360(targetHeading + TARGET_HEADING_OFFSET_DEG);
     chosenMinDistCm = targetDistCm;
 
     Serial.print("Chosen long-wall target dist=");
@@ -474,11 +476,19 @@ void fsm::doHoming() {
     case HOMING_RAM_WALL:
         if (millis() - ramStartMs >= RAM_TIME_MS) {
             motors->Stop(true);
-            backOffInRangeStart = -1;
-            Serial.println("Corner rammed — backing off to 86 mm");
-            state = HOMING_BACK_OFF;
+            settleStartMs = millis();
+            Serial.println("Corner rammed — settling 500ms");
+            state = HOMING_SETTLE;
         } else {
             motors->MoveForward(RAM_SPEED);
+        }
+        break;
+
+    case HOMING_SETTLE:
+        if (millis() - settleStartMs >= 500) {
+            backOffInRangeStart = -1;
+            Serial.println("Settled — backing off to 86 mm");
+            state = HOMING_BACK_OFF;
         }
         break;
 
@@ -526,6 +536,13 @@ void fsm::doRun() {
 
     case RUN_MOVE_DOWN:
         {
+            if (runMoveDownStartMs == 0) runMoveDownStartMs = millis();
+
+            unsigned long elapsed = millis() - runMoveDownStartMs;
+            float rampFactor = (elapsed < MOVE_RAMP_TIME_MS) ?
+                               (float)elapsed / (float)MOVE_RAMP_TIME_MS : 1.0f;
+            int rampedSpeed = (int)(MOVE_SPEED * rampFactor);
+
             float rearMm = perception->getIRLongRear();
             if (rearMm > 0.0f && rearMm <= REAR_STOP_MM) {
                 motors->Stop(true);
@@ -536,8 +553,8 @@ void fsm::doRun() {
                 state = RUN_STRAFE_LEFT_A;
             } else {
                 if (firstRun) {
-                    int vy = (int)motors->wallFollowCorrection(87.0f);
-                    motors->drive(-MOVE_SPEED, vy, (int)motors->headingCorrection());
+                    int vy = (int)motors->wallFollowCorrection(80.0f);
+                    motors->drive(-rampedSpeed, vy, (int)motors->headingCorrection());
                 } else if (runCount >= 9) {
                     int vy = (int)motors->wallFollowCorrection(187.0f, true);
                     motors->drive(-MOVE_SPEED, vy, (int)motors->headingCorrection());

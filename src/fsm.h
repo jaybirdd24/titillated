@@ -12,6 +12,7 @@ enum RobotState {
     HOMING_APPROACH_WALL,   // move right until US < 15 cm
     HOMING_APPROACH_FWD,    // move forward until front IR < 150 mm
     HOMING_RAM_WALL,        // drive diagonally into corner to square up
+    HOMING_SETTLE,          // wait 500ms for motors to stabilize after ramming
     HOMING_BACK_OFF,        // strafe left until IR med right reads 86 mm
     // ── Run ───────────────────────────────────────────────────────────────────
     RUN_MOVE_DOWN,
@@ -103,6 +104,7 @@ private:
 
     // ── Ram / back-off state ────────────────────────────────────────────────
     unsigned long ramStartMs;
+    unsigned long settleStartMs;
     long          backOffInRangeStart;
 
     // ── Wall-follow state (APPROACH_FWD) ─────────────────────────────────────
@@ -112,6 +114,7 @@ private:
 
     // ── Run state ─────────────────────────────────────────────────────────────
     unsigned long strafeStartMs;
+    unsigned long runMoveDownStartMs;
     float         runHeading;   // saved heading at run start — kept for all passes
     float         runWfSetpoint; // IR distance (mm) captured after square-up for wall follow
 
