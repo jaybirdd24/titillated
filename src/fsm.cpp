@@ -15,7 +15,7 @@ const float OPPOSITE_TOL_DEG = 20.0f;
 static const int   RETURN_SPIN_FAST       = 130;
 static const int   RETURN_SPIN_SLOW       = 110;
 static const float RETURN_SLOW_BAND_DEG   = 10.0f;
-static const float RETURN_STOP_TOL_DEG    = 3.0f;
+static const float RETURN_STOP_TOL_DEG    = 3.0f; 
 static const unsigned long RETURN_STABLE_MS = 250;
 
 
@@ -250,30 +250,26 @@ int fsm::findOppositePairs(const WallTrough troughs[], int troughCount,
 
 bool fsm::chooseLongWallTarget(const WallTrough troughs[], int troughCount,
                                float &targetHeading, float &targetDistCm) {
-    OppositePair pairs[8];
+
+
+  OppositePair pairs[8];
     int pairCount = findOppositePairs(troughs, troughCount, pairs, 8);
     if (pairCount <= 0) return false;
 
     int bestPair = -1;
-    float bestError = 1e9f;
-    const float EXPECTED_LONG_WALL_SPAN_CM = 115.7f; // Width of your table
+    float bestSpan = 1e9f;
 
     for (int i = 0; i < pairCount; i++) {
-        // Find the pair whose total span is closest to 121.7 cm
-        float err = fabsf(pairs[i].spanCm - EXPECTED_LONG_WALL_SPAN_CM);
-        if (err < bestError) {
-            bestError = err;
+        if (pairs[i].spanCm < bestSpan) {
+            bestSpan = pairs[i].spanCm;
             bestPair = i;
         }
     }
-    
-    // If even the best pair is wildly off (e.g., error > 15cm), data is bad
-    if (bestPair < 0 || bestError > 15.0f) return false;
+    if (bestPair < 0) return false;
 
     const WallTrough &t1 = troughs[pairs[bestPair].a];
     const WallTrough &t2 = troughs[pairs[bestPair].b];
 
-    // Pick the closest of the two long walls to square up against
     const WallTrough &chosen = (t1.minDistCm <= t2.minDistCm) ? t1 : t2;
 
     targetHeading = chosen.centerHeading;
@@ -423,48 +419,90 @@ void fsm::doHoming() {
 
     case HOMING_RETURN:
 
-    updateHeading();
     {
+        // --- 1. Persistent State Variables ---
+        static float returnIntegral = 0.0f;
+        static float returnLastErr  = 0.0f;
+        static unsigned long returnLastTime = 0;
+        static bool returnInTolActive = false;
+        static unsigned long returnInTolStart = 0;
+
+        // --- 2. Controller Constants (Adjust these for your robot) ---
+        const float Kp = 12.0f;     // Proportional: Power per degree of error
+        const float Ki = 0.01f;      // Integral: Overcomes friction/stiction
+        const float Kd = 3.0f;      // Derivative: Prevents overshoot (braking)
+        const int MIN_PWM = 100;    // The "Kick": Lowest speed that moves the robot
+        const int MAX_PWM = 180;    // Speed limit for this state
+        const float TOL   = 0.8f;   // Stop within 1.5 degrees
+        const int STABLE_MS = 200;  // Must stay in tolerance for 200ms
+
+        // --- 3. Sensors & Timing ---
+        updateHeading(); // Refresh the 'heading' variable
         float errDeg = signedAngleErrorDeg(scanTargetHeading, heading);
         float absErr = fabsf(errDeg);
+        
         unsigned long now = millis();
+        if (returnLastTime == 0) returnLastTime = now; 
+        float dt = (now - returnLastTime) / 1000.0f;
+        if (dt <= 0) dt = 0.001f;
+        returnLastTime = now;
 
-        // 1. Calculate Derivative (rate of change of error)
-        static float lastErr = 0;
-        static unsigned long lastTime = 0;
-        float dt = (now - lastTime) / 1000.0f;
-        float derivative = (dt > 0) ? (errDeg - lastErr) / dt : 0;
-        
-        lastErr = errDeg;
-        lastTime = now;
+        // --- 4. PID Logic ---
+        // Only accumulate integral if we are struggling to reach the goal
+        if (absErr > TOL) {
+            returnIntegral += errDeg * dt;
+        } else {
+            returnIntegral = 0; 
+        }
+        returnIntegral = constrain(returnIntegral, -60.0f, 60.0f); // Windup guard
 
-        // 2. Controller Constants (TUNE THESE)
-        float Kp = 15.0f;  // Proportional: How hard to turn based on error
-        float Kd = 1.2f;  // Derivative: How much to "brake" to prevent overshoot
+        float derivative = (errDeg - returnLastErr) / dt;
+        returnLastErr = errDeg;
 
-        // 3. Calculate Output
-        float output = (Kp * errDeg) + (Kd * derivative);
-        
-        // Clamp the output to your motor limits
-        int motorSpeed = (int)constrain(output, -RETURN_SPIN_FAST, RETURN_SPIN_FAST);
+        float output = (Kp * errDeg) + (Ki * returnIntegral) + (Kd * derivative);
+        int motorSpeed = (int)output;
 
-        // 4. Deadband/Stop Logic
-        if (absErr <= RETURN_STOP_TOL_DEG && fabsf(derivative) < 2.0f) {
-            // Stop if we are close AND our rotation speed is nearly zero
+        // --- 5. Deadband Compensation (The "Stiction" Fix) ---
+        // This forces the robot to use at least MIN_PWM if it's not at the target yet
+        if (absErr > TOL) {
+            if (motorSpeed > 0 && motorSpeed < MIN_PWM) motorSpeed = MIN_PWM;
+            if (motorSpeed < 0 && motorSpeed > -MIN_PWM) motorSpeed = -MIN_PWM;
+        } else {
+            motorSpeed = 0; 
+        }
+        motorSpeed = constrain(motorSpeed, -MAX_PWM, MAX_PWM);
+
+        // --- 6. Execution ---
+        if (motorSpeed == 0) {
             motors->Stop(true);
+        } else if (motorSpeed > 0) {
+            motors->RotateCCW(motorSpeed);
+        } else {
+            motors->RotateCW(abs(motorSpeed));
+        }
+
+        // --- 7. Stability & Exit Logic ---
+        if (absErr <= TOL) {
             if (!returnInTolActive) {
                 returnInTolActive = true;
                 returnInTolStart = now;
-            } else if (now - returnInTolStart >= RETURN_STABLE_MS) {
+            } else if (now - returnInTolStart >= (unsigned long)STABLE_MS) {
+                // SUCCESS: Target reached and robot is still
+                motors->Stop(true);
+                
+                // RESET STATICS for the next time this state is called
+                returnIntegral = 0;
+                returnLastErr = 0;
+                returnLastTime = 0;
+                returnInTolActive = false;
+
+                Serial.println(">>> Target Heading Locked.");
                 state = HOMING_APPROACH_WALL;
             }
         } else {
-            returnInTolActive = false;
-            // Apply speed (positive CCW, negative CW)
-            if (motorSpeed > 0) motors->RotateCCW(motorSpeed);
-            else motors->RotateCW(abs(motorSpeed));
+            returnInTolActive = false; // Reset timer if we drift out
         }
-    }
+        }
         break;
 
     case HOMING_APPROACH_WALL:
