@@ -156,44 +156,66 @@ bool fsm::findTrough(int minIdx, int &leftIdx, int &rightIdx) {
     if (minVal < US_MIN_CM || minVal > US_MAX_CM) return false;
 
     float threshold = minVal + TROUGH_BAND_CM;
-    leftIdx = minIdx;
-    rightIdx = minIdx;
+    
+    // Expand Left (wrapping around if i == 0)
+    int leftSteps = 0;
+    int currLeft = minIdx;
+    while (leftSteps < scanCount / 2) { // Limit search to half the circle
+        int testIdx = (currLeft == 0) ? scanCount - 1 : currLeft - 1;
+        float d = scanDistances[testIdx];
+        if (d < US_MIN_CM || d > US_MAX_CM || d > threshold) break;
+        currLeft = testIdx;
+        leftSteps++;
+    }
+    leftIdx = currLeft;
 
-    while (leftIdx - 1 >= 0) {
-        float d = scanDistances[leftIdx - 1];
+    // Expand Right (wrapping around if i == scanCount - 1)
+    int rightSteps = 0;
+    int currRight = minIdx;
+    while (rightSteps < scanCount / 2) {
+        int testIdx = (currRight == scanCount - 1) ? 0 : currRight + 1;
+        float d = scanDistances[testIdx];
         if (d < US_MIN_CM || d > US_MAX_CM || d > threshold) break;
-        leftIdx--;
+        currRight = testIdx;
+        rightSteps++;
     }
-    while (rightIdx + 1 < scanCount) {
-        float d = scanDistances[rightIdx + 1];
-        if (d < US_MIN_CM || d > US_MAX_CM || d > threshold) break;
-        rightIdx++;
-    }
-    return (rightIdx - leftIdx + 1) >= MIN_TROUGH_SAMPLES;
+    rightIdx = currRight;
+
+    int totalSamples = leftSteps + rightSteps + 1;
+    return totalSamples >= MIN_TROUGH_SAMPLES;
 }
 
 int fsm::findAllTroughs(WallTrough troughs[], int maxTroughs) {
     int count = 0;
 
-    for (int i = 1; i < scanCount - 1; i++) {
+    // Check full 0 to scanCount array
+    for (int i = 0; i < scanCount; i++) {
+        // Circular index wrapping
+        int prev = (i == 0) ? scanCount - 1 : i - 1;
+        int next = (i == scanCount - 1) ? 0 : i + 1;
+
         float d = scanDistances[i];
         if (d < US_MIN_CM || d > US_MAX_CM) continue;
 
-        float dPrev = scanDistances[i - 1];
-        float dNext = scanDistances[i + 1];
+        float dPrev = scanDistances[prev];
+        float dNext = scanDistances[next];
 
         if (dPrev < US_MIN_CM || dPrev > US_MAX_CM) continue;
         if (dNext < US_MIN_CM || dNext > US_MAX_CM) continue;
 
-        // local minimum candidate
+        // Circular local minimum candidate
         if (d <= dPrev && d <= dNext) {
             int leftIdx, rightIdx;
             if (!findTrough(i, leftIdx, rightIdx)) continue;
 
-            // avoid duplicates from multiple minima inside same trough
             bool overlaps = false;
             for (int k = 0; k < count; k++) {
-                if (!(rightIdx < troughs[k].leftIdx || leftIdx > troughs[k].rightIdx)) {
+                // Since indices can wrap, 1D index math fails here. 
+                // Instead, check if the two minimums are physically close in the real world.
+                // If they are within 35 degrees of each other, they are the same trough.
+                float angDiff = angleDiffDeg(scanHeadings[i], scanHeadings[troughs[k].minIdx]);
+                
+                if (angDiff < 35.0f) { 
                     overlaps = true;
                     // keep the deeper trough minimum if needed
                     if (d < troughs[k].minDistCm) {
@@ -257,19 +279,27 @@ bool fsm::chooseLongWallTarget(const WallTrough troughs[], int troughCount,
     if (pairCount <= 0) return false;
 
     int bestPair = -1;
-    float bestSpan = 1e9f;
+    float smallestSpan = 1e9f;
 
+    // 1. Find the pair with the absolute smallest span
     for (int i = 0; i < pairCount; i++) {
-        if (pairs[i].spanCm < bestSpan) {
-            bestSpan = pairs[i].spanCm;
+        if (pairs[i].spanCm < smallestSpan) {
+            smallestSpan = pairs[i].spanCm;
             bestPair = i;
         }
     }
-    if (bestPair < 0) return false;
+
+    // 2. The Simple Threshold Check
+    // We expect ~121cm for the width. We use 140cm as a safe cutoff.
+    // If even the smallest span is greater than 140cm, something is wrong.
+    if (bestPair < 0 || smallestSpan > 140.0f) {
+        return false; 
+    }
 
     const WallTrough &t1 = troughs[pairs[bestPair].a];
     const WallTrough &t2 = troughs[pairs[bestPair].b];
 
+    // 3. Pick the closest of the two long walls to square up against
     const WallTrough &chosen = (t1.minDistCm <= t2.minDistCm) ? t1 : t2;
 
     targetHeading = chosen.centerHeading;
