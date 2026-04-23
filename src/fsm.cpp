@@ -488,42 +488,10 @@ void fsm::doHoming() {
         if (millis() - settleStartMs >= 500) {
             backOffInRangeStart = -1;
             Serial.println("Settled — backing off to 86 mm");
-            state = HOMING_BACK_OFF;
+            // state = HOMING_BACK_OFF;
+            state = RUN_MOVE_DOWN; // skip back-off and start run immediately (for better score)
         }
         break;
-
-    case HOMING_BACK_OFF:
-        {
-            float ir_mm = perception->getIRMedRight();
-            if (ir_mm <= 0.0f) break;
-
-            float error = -ir_mm + BACK_OFF_TARGET_MM;
-            unsigned long now = millis();
-
-            if (fabsf(error) < BACK_OFF_TOLERANCE_MM) {
-                motors->Stop(true);
-                if (backOffInRangeStart < 0) backOffInRangeStart = (long)now;
-                if (now - (unsigned long)backOffInRangeStart >= BACK_OFF_HOLD_MS) {
-                    runHeading = motors->getHeading();
-                    runWfSetpoint = ir_mm;
-                    motors->resetWallFollow();
-                    Serial.print("Squared up — backed off to ");
-                    Serial.print(ir_mm, 1);
-                    Serial.println(" mm — starting run");
-                    state = RUN_MOVE_DOWN;
-                }
-            } else {
-                backOffInRangeStart = -1;
-                int speed = (int)constrain(fabsf(BACK_OFF_KP * error),
-                                           BACK_OFF_MIN_SPEED, BACK_OFF_MAX_SPEED);
-                if (error > 0.0f)
-                    motors->MoveLeft(speed);   // too far from wall → move left (away)
-                else
-                    motors->MoveRight(speed);  // too close → move right (closer)
-            }
-        }
-        break;
-
     default:
         break;
     }
