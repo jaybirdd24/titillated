@@ -40,6 +40,7 @@ private:
     float usDistanceCm;
     float usLastValidCm;    // last accepted reading (for spike rejection)
     int   usRejectCount;    // consecutive rejected readings
+    bool  usRawMode;        // true = return raw readings, false = smoothed
 
     // ── Helpers ───────────────────────────────────────────────────
     void  readIR();
@@ -86,6 +87,7 @@ public:
 
     // ── Ultrasonic getter ─────────────────────────────────────────
     float getUltrasonicCm();  // distance in cm, 0 if no echo
+    void  setUltrasonicRaw(bool raw);  // toggle raw vs. smoothed mode
 
     // ── Battery ───────────────────────────────────────────────────
     int   getBatteryRaw();            // raw ADC 0-1023

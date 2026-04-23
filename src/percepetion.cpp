@@ -14,6 +14,7 @@ percepetion::percepetion()
       usDistanceCm(0.0f),
       usLastValidCm(-1.0f),
       usRejectCount(0),
+      usRawMode(false),
       gyro_bias(0.0f),
       gyro_bias_sum(0.0),
       gyro_bias_count(0),
@@ -99,8 +100,14 @@ void percepetion::readUltrasonic()
     unsigned long pulse = pulseIn(PIN_US_ECHO, HIGH, US_MAX_PULSE_US);
     float rawCm = (pulse > 0) ? (float)pulse / 58.0f : 0.0f;
 
-    // No echo — keep previous filtered value
+    // No echo — keep previous value
     if (rawCm <= 0.0f) return;
+
+    // Raw mode: skip smoothing and spike rejection
+    if (usRawMode) {
+        usDistanceCm = rawCm;
+        return;
+    }
 
     // Spike rejection: if reading jumps too far from last valid, reject it.
     // After 3 consecutive rejects, accept anyway (the robot actually moved).
@@ -232,6 +239,11 @@ int percepetion::getIRLongRearRaw()
 float percepetion::getUltrasonicCm()
 {
     return usDistanceCm;
+}
+
+void percepetion::setUltrasonicRaw(bool raw)
+{
+    usRawMode = raw;
 }
 
 // ═══════════════════════════════════════════════════════════════════

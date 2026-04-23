@@ -31,8 +31,10 @@ public:
     ~fsm();
 
     void        fsmUpdate();
-    RobotState  getState()   const { return state; }
-    float       getHeading() const { return heading; }
+    RobotState  getState()            const { return state; }
+    float       getHeading()          const { return heading; }
+    float       getTargetHeading()    const { return scanTargetHeading; }
+    float       getTargetDistCm()     const { return chosenMinDistCm; }
 
     struct WallTrough {
         int leftIdx;
@@ -86,6 +88,7 @@ private:
                           OppositePair pairs[], int maxPairs);
     bool chooseLongWallTarget(const WallTrough troughs[], int troughCount,  
                              float &targetHeading, float &targetDistCm);
+void stitchWrapAroundTrough(WallTrough troughs[], int &count, int maxTroughs);
 
     // Return state
     unsigned long returnInTolStart;

@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include <SoftwareSerial.h>
 #include "percepetion.h"
 #include "movement.h"
 #include "fsm.h"
@@ -28,8 +29,11 @@ static const char* stateName(RobotState s) {
     }
 }
 
+static SoftwareSerial WirelessSerial(10, 11);  // RX, TX (HC-12 module)
+
 void setup() {
     Serial.begin(115200);
+    WirelessSerial.begin(115200);
     perception.init();
     motors.enable();
     delay(2000);
@@ -41,7 +45,11 @@ void setup() {
     }
 
     Serial.println("=== START ===");
-    Serial.println("State,Heading,US_cm");
+    WirelessSerial.println("=== START ===");
+    // CSV header
+    const char* hdr = "ms,state,heading,us_cm,target_hdg,target_dist_cm,ir_front_mm,ir_right_mm,ir_rear_mm,ir_left_mm";
+    Serial.println(hdr);
+    WirelessSerial.println(hdr);
 }
 
 void loop() {
@@ -49,15 +57,39 @@ void loop() {
     stateMachine.fsmUpdate();
 
     static unsigned long lastPrint = 0;
-    if (millis() - lastPrint >= 100) {
-        lastPrint = millis();
-        // Serial.print(stateName(stateMachine.getState()));
-        // Serial.print(",");
-        // Serial.print(stateMachine.getHeading(), 1);
-        // Serial.print(",");
-        // Serial.println(perception.getUltrasonicCm(), 1);
-        float length = perception.getIRLongLeft();
-        Serial.print("IR long left (mm): ");
-        Serial.println(length, 1);
+
+    RobotState s = stateMachine.getState();
+
+    if (s <= HOMING_BACK_OFF) {
+        unsigned long now = millis();
+        if (now - lastPrint >= 20) {   // 20 Hz
+            lastPrint = now;
+
+            float heading = stateMachine.getHeading();
+            float us      = perception.getUltrasonicCm();
+            float tgtHdg  = stateMachine.getTargetHeading();
+            float tgtDist = stateMachine.getTargetDistCm();
+            float irFront = perception.getIRMedFront();
+            float irRight = perception.getIRMedRight();
+            float irRear  = perception.getIRLongRear();
+            float irLeft  = perception.getIRLongLeft();
+
+            // helper lambda to print one CSV row to a Stream
+            auto printRow = [&](Stream &out) {
+                out.print(now);          out.print(',');
+                out.print(stateName(s)); out.print(',');
+                out.print(heading, 1);   out.print(',');
+                out.print(us, 1);        out.print(',');
+                out.print(tgtHdg, 1);    out.print(',');
+                out.print(tgtDist, 1);   out.print(',');
+                out.print(irFront, 1);   out.print(',');
+                out.print(irRight, 1);   out.print(',');
+                out.print(irRear, 1);    out.print(',');
+                out.println(irLeft, 1);
+            };
+
+            printRow(Serial);
+            printRow(WirelessSerial);
+        }
     }
 }

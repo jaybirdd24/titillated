@@ -1,6 +1,7 @@
 #include "fsm.h"
 #include <Arduino.h>
-#include <math.h>
+#include <math.h> 
+
 
 // ── Tuning ────────────────────────────────────────────────────────────────────
 // ── Scan / return tuning ─────────────────────────────────────────────────────
@@ -220,6 +221,49 @@ int fsm::findAllTroughs(WallTrough troughs[], int maxTroughs) {
     return count;
 }
 
+// After the main loop, check if index 0 and index scanCount-1
+// are part of the same trough (i.e. the minimum straddles 0°/360°)
+void fsm::stitchWrapAroundTrough(WallTrough troughs[], int &count, int maxTroughs) {
+    if (scanCount < 3) return;
+
+    float dFirst = scanDistances[0];
+    float dLast  = scanDistances[scanCount - 1];
+    if (dFirst < US_MIN_CM || dFirst > US_MAX_CM) return;
+    if (dLast  < US_MIN_CM || dLast  > US_MAX_CM) return;
+
+    // Check if the first and last samples are both below the trough
+    // threshold of each other — i.e. they could belong to the same trough
+    float sharedThreshold = min(dFirst, dLast) + TROUGH_BAND_CM;
+    if (dFirst > sharedThreshold || dLast > sharedThreshold) return;
+
+    // Find which existing trough (if any) owns index 0 and index scanCount-1
+    int troughAtStart = -1, troughAtEnd = -1;
+    for (int k = 0; k < count; k++) {
+        if (troughs[k].leftIdx == 0)              troughAtStart = k;
+        if (troughs[k].rightIdx == scanCount - 1) troughAtEnd   = k;
+    }
+
+    if (troughAtStart == -1 || troughAtEnd == -1) return;
+    if (troughAtStart == troughAtEnd) return; // already same trough
+
+    // Merge: keep the one with the smaller minDist, extend its bounds
+    int keep  = (troughs[troughAtStart].minDistCm <= troughs[troughAtEnd].minDistCm)
+                ? troughAtStart : troughAtEnd;
+    int discard = (keep == troughAtStart) ? troughAtEnd : troughAtStart;
+
+    troughs[keep].leftIdx  = min(troughs[keep].leftIdx,  troughs[discard].leftIdx);
+    troughs[keep].rightIdx = max(troughs[keep].rightIdx, troughs[discard].rightIdx);
+    // Recompute center using circular mean of the boundary headings
+    troughs[keep].centerHeading = circularMeanDeg(
+        scanHeadings[troughs[keep].leftIdx],
+        scanHeadings[troughs[keep].rightIdx]
+    );
+
+    // Remove the discarded trough by shifting the array
+    for (int k = discard; k < count - 1; k++) troughs[k] = troughs[k + 1];
+    count--;
+}
+
 int fsm::findOppositePairs(const WallTrough troughs[], int troughCount,
                            OppositePair pairs[], int maxPairs) {
     int count = 0;
@@ -383,6 +427,7 @@ void fsm::doHoming() {
 {
     WallTrough troughs[8];
     int troughCount = findAllTroughs(troughs, 8);
+    stitchWrapAroundTrough(troughs, troughCount, 8);
 
     Serial.print("Found troughs: ");
     Serial.println(troughCount);
